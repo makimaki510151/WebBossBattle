@@ -1,921 +1,555 @@
 // script.js (Client-side)
 
 // 定数定義
-const CANVAS_SIZE = 800; // ゲーム画面サイズ
-const LOBBY_CANVAS_SIZE = 600; // ロビー画面サイズ
+const CANVAS_SIZE = 800;
+const LOBBY_CANVAS_SIZE = 600;
 const PLAYER_RADIUS = 20;
 const BOSS_RADIUS = 50;
-const AUTO_ATTACK_RANGE = 200; // 通常攻撃射程
-const MOVE_DELAY = 33; // 移動入力の最小間隔 (ms)
-const MOVE_THRESHOLD = 0.5; // ゲームパッドアナログスティックの閾値
-// [追加] プレイヤーの初期スポーン座標 (ロビー画面中央: 300)
-const PLAYER_SPAWN_CENTER_LOBBY = LOBBY_CANVAS_SIZE / 2;
+const LOBBY_DUMMY_BOSS_RADIUS = 40; 
+const MOVE_DELAY = 33; 
+const JOB_INTERACT_DISTANCE = 80;
 
-// 職業ごとの設定
+// 職業ごとの設定 (サーバーと同期)
 const JOB_DATA = {
     MELEE: {
         name: '近接アタッカー',
         color: '#F44336',
         description: '高耐久・高火力。ボスに密着して戦う。',
-        autoAttackDamage: 5,
-        skill1: { name: '突進', cd: 8000, range: 100 },
-        skill2: { name: '防御', cd: 15000, duration: 3000 },
-        super: { name: '大回転斬り', cd: 40000, range: 150 }
+        range: 100, 
+        skill1: { name: '突進', cd: 8000 },
+        skill2: { name: '防御', cd: 15000 },
+        super: { name: '大回転斬り', cd: 40000 }
     },
     RANGED: {
         name: '遠距離アタッカー',
         color: '#2196F3',
-        description: '遠距離から継続攻撃。紙耐久。',
-        autoAttackDamage: 2,
-        skill1: { name: '連射', cd: 5000, count: 3 },
-        skill2: { name: '後退ジャンプ', cd: 12000, distance: 150 },
-        super: { name: '超精密射撃', cd: 45000, damage: 500 }
+        description: '遠距離からの攻撃が得意。機動力に優れる。',
+        range: 500,
+        skill1: { name: '後退射撃', cd: 5000 },
+        skill2: { name: '広範囲爆撃', cd: 10000 },
+        super: { name: 'バースト射撃', cd: 45000 }
     },
     HEALER: {
         name: 'ヒーラー',
         color: '#4CAF50',
-        description: '味方を回復。攻撃力は低い。',
-        autoAttackDamage: 1,
-        skill1: { name: '単体回復', cd: 7000, range: 300, heal: 100 },
-        skill2: { name: '加速フィールド', cd: 20000, range: 150, duration: 5000 },
-        super: { name: '全体大回復', cd: 60000, heal: 300 }
+        description: '味方を回復し、サポートする。',
+        range: 300,
+        skill1: { name: '緊急回復', cd: 8000 },
+        skill2: { name: 'バフ', cd: 15000 },
+        super: { name: '範囲回復', cd: 40000 }
     },
-    SUPPORT: {
+    SUPPORTER: { 
         name: 'サポーター',
-        color: '#FF9800',
-        description: 'デバフ/バフで味方を支援。',
-        autoAttackDamage: 1,
-        skill1: { name: '防御デバフ', cd: 10000, range: 250, duration: 8000 },
-        skill2: { name: '攻撃バフ', cd: 18000, range: 200, duration: 5000 },
-        super: { name: 'ボスタイムストップ', cd: 70000, duration: 4000 }
+        color: '#FFEB3B',
+        description: 'デバフやシールドで戦況を有利にする。',
+        range: 350,
+        skill1: { name: 'デバフ付与', cd: 10000 },
+        skill2: { name: 'シールド付与', cd: 12000 },
+        super: { name: '戦場支配', cd: 50000 }
     }
 };
 
-// サーバーから受信するゲーム状態
-let gameState = {
-    players: {},
-    boss: null,
-    projectiles: [],
-    bossAttacks: [],
-    gameRunning: false,
-    startTime: 0,
-    countdown: 3
+const JOB_INTERACT_POSITIONS = {
+    MELEE: { x: LOBBY_CANVAS_SIZE / 2, y: LOBBY_CANVAS_SIZE / 2 - 200 }, 
+    RANGED: { x: LOBBY_CANVAS_SIZE / 2 + 200, y: LOBBY_CANVAS_SIZE / 2 },
+    HEALER: { x: LOBBY_CANVAS_SIZE / 2, y: LOBBY_CANVAS_SIZE / 2 + 200 },
+    SUPPORTER: { x: LOBBY_CANVAS_SIZE / 2 - 200, y: LOBBY_CANVAS_SIZE / 2 }
 };
 
-// 自身のクライアント情報
+// --- グローバル変数 ---
+let ws;
 let game = {
     playerId: null,
-    isHost: false,
-    socket: null,
-    currentScreen: 'title',
-    lastMoveTime: 0,
-    gamepadInterval: null,
-    gameLoop: null,
-
-    // Canvas/Context
-    gameCanvas: null,
-    gameCtx: null,
-    lobbyCanvas: null,
-    lobbyCtx: null,
-
-    // オーディオ (前回の迷路ゲームの流用)
-    audioCtx: null,
-    masterGainNode: null,
-    DEFAULT_VOLUME: 0.3,
-
-    // ホスト設定
-    bossMaxHp: 10000,
-    bossDamageMultiplier: 1.0,
+    players: {},
+    boss: null,
+    isGameRunning: false,
+    jobData: JOB_DATA, 
+    currentScreen: 'title', 
+    lastMoveTime: 0, 
+    gameStartTime: 0,
+    stats: {},
+    isHost: false, // ホスト判定
+    bossSettings: {}, // ホスト設定
+    activeAttacks: [] // ボスの攻撃予兆
 };
 
-// キーボードの状態を管理するためのグローバル変数
-let keysPressed = {};
-const MOVEMENT_KEYS = ['KeyW', 'KeyS', 'KeyA', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+// --- DOM要素とキャンバス ---
+let screens = {};
+let lobbyCanvas, lobbyCtx;
+let gameCanvas, gameCtx;
+let selectJobButtons = {}; 
 
-// --- 初期化とイベント設定 ---
-document.addEventListener('DOMContentLoaded', () => {
-    game.gameCanvas = document.getElementById('game-canvas');
-    game.gameCtx = game.gameCanvas.getContext('2d');
-    game.lobbyCanvas = document.getElementById('lobby-canvas');
-    game.lobbyCtx = game.lobbyCanvas.getContext('2d');
-
-    setupEventListeners();
-    initAudio();
-    showScreen('title');
-    startGamepadPolling();
-});
-
-function setupEventListeners() {
-    // 接続・切断
-    document.getElementById('create-room-button').addEventListener('click', () => showConnectionModal('host'));
-    document.getElementById('join-room-button').addEventListener('click', () => showConnectionModal('guest'));
-    document.getElementById('connect-submit').addEventListener('click', connectToServer);
-    document.getElementById('connection-cancel').addEventListener('click', hideConnectionModal);
-    document.getElementById('lobby-disconnect-button').addEventListener('click', disconnectServer);
-    document.getElementById('back-to-title').addEventListener('click', disconnectServer);
-    document.getElementById('back-to-select-clear').addEventListener('click', disconnectServer);
-
-    // ホスト操作
-    document.getElementById('start-game-button').addEventListener('click', sendStartGameRequest);
-
-    // ホスト設定の更新
-    const bossHpInput = document.getElementById('boss-hp');
-    const bossHpValueSpan = document.getElementById('boss-hp-value');
-    bossHpInput.addEventListener('input', (e) => {
-        game.bossMaxHp = parseInt(e.target.value) * 1000;
-        bossHpValueSpan.textContent = `${game.bossMaxHp.toLocaleString()} (x${e.target.value})`;
+// --- 画面遷移関数 ---
+function changeScreen(nextScreen) {
+    Object.keys(screens).forEach(key => {
+        if (screens[key]) {
+            screens[key].classList.remove('active');
+        }
     });
-
-    const bossDamageInput = document.getElementById('boss-damage');
-    const bossDamageValueSpan = document.getElementById('boss-damage-value');
-    bossDamageInput.addEventListener('input', (e) => {
-        game.bossDamageMultiplier = parseFloat(e.target.value);
-        bossDamageValueSpan.textContent = `${game.bossDamageMultiplier.toFixed(1)}倍`;
-    });
-
-    // 入力
-    window.addEventListener("gamepadconnected", updateGamepadStatus);
-    window.addEventListener("gamepaddisconnected", updateGamepadStatus);
-
-    // キーボードの移動とアクション処理を分離
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-}
-
-function initAudio() {
-    const audioInitHandler = () => {
-        if (!game.audioCtx) {
-            try {
-                game.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                game.masterGainNode = game.audioCtx.createGain();
-                game.masterGainNode.connect(game.audioCtx.destination);
-                game.masterGainNode.gain.setValueAtTime(game.DEFAULT_VOLUME, game.audioCtx.currentTime);
-            } catch (e) {
-                console.warn('Web Audio APIはサポートされていません:', e);
-                return;
+    if (screens[nextScreen]) {
+        screens[nextScreen].classList.add('active');
+        if (nextScreen === 'lobby') {
+            requestAnimationFrame(drawLobby);
+            if (game.isHost) {
+                setupHostSettingsListeners(); // ホストになったらスライダーリスナーを再設定
             }
         }
-
-        if (game.audioCtx.state === 'suspended') {
-            game.audioCtx.resume();
+        if (nextScreen === 'game') {
+            requestAnimationFrame(drawGame);
         }
-
-        document.removeEventListener('click', audioInitHandler);
-        document.removeEventListener('keydown', audioInitHandler);
-    };
-
-    document.addEventListener('click', audioInitHandler);
-    document.addEventListener('keydown', audioInitHandler);
-}
-
-function playSound(type) {
-    if (!game.audioCtx || !game.masterGainNode) return;
-    const oscillator = game.audioCtx.createOscillator();
-    const soundGainNode = game.audioCtx.createGain();
-    oscillator.connect(soundGainNode);
-    soundGainNode.connect(game.masterGainNode);
-
-    let freq, duration, initialVolume;
-
-    switch (type) {
-        case 'move': freq = 440; duration = 0.05; initialVolume = 0.1; break;
-        case 'hit': freq = 120; duration = 0.1; initialVolume = 0.3; break;
-        case 'attack': freq = 880; duration = 0.02; initialVolume = 0.2; break;
-        case 'skill': freq = 1300; duration = 0.1; initialVolume = 0.4; break;
-        case 'damage': freq = 60; duration = 0.2; initialVolume = 0.6; break;
-        case 'win': freq = 1000; duration = 0.5; initialVolume = 0.4; break;
-        case 'lose': freq = 50; duration = 1.0; initialVolume = 0.6; break;
-        default: return;
     }
-
-    oscillator.frequency.setValueAtTime(freq, game.audioCtx.currentTime);
-    soundGainNode.gain.setValueAtTime(initialVolume, game.audioCtx.currentTime);
-
-    oscillator.start();
-    soundGainNode.gain.exponentialRampToValueAtTime(0.001, game.audioCtx.currentTime + duration);
-    oscillator.stop(game.audioCtx.currentTime + duration);
+    game.currentScreen = nextScreen;
 }
 
-// --- UI/画面管理 ---
-function showScreen(screenName) {
-    document.querySelectorAll('.screen').forEach(screen => screen.classList.remove('active'));
-    const screenElement = document.getElementById(`${screenName}-screen`);
-    if (screenElement) screenElement.classList.add('active');
-    game.currentScreen = screenName;
-
-    // 💡 修正: game.gameLoop を使用
-    if (game.gameLoop) {
-        clearInterval(game.gameLoop);
-        game.gameLoop = null;
-    }
-
-    if (screenName === 'lobby') {
-        renderLobby();
-        game.gameLoop = setInterval(renderLobby, 1000 / 30); // ロビー描画ループ
-    } else if (screenName === 'game') {
-        game.gameLoop = setInterval(gameRenderLoop, 1000 / 60); // ゲーム描画ループ
-        document.getElementById('game-canvas').focus();
-    } else if (screenName === 'title') {
-        document.getElementById('create-room-button').focus();
-    }
-}
-
-function showConnectionModal(type) {
-    const modal = document.getElementById('connection-modal');
-    const title = document.getElementById('connection-title');
-    const submitButton = document.getElementById('connect-submit');
-    const addressInput = document.getElementById('server-address');
-
-    game.isHost = (type === 'host');
-    title.textContent = game.isHost ? '部屋を作成 (ホスト)' : '部屋に参加 (ゲスト)';
-    submitButton.textContent = game.isHost ? '部屋を作成' : '接続して参加';
-
-    if (game.isHost) {
-        addressInput.value = addressInput.value || 'localhost:8080';
-    } else if (!addressInput.value) {
-        addressInput.value = '';
-    }
-
-    document.getElementById('title-screen').classList.remove('active');
-    modal.classList.add('active');
-    addressInput.focus();
-}
-
-function hideConnectionModal() {
-    document.getElementById('connection-modal').classList.remove('active');
-    document.getElementById('title-screen').classList.add('active');
-}
-
-// --- 通信処理 ---
-function connectToServer() {
-    const address = document.getElementById('server-address').value.trim();
-    const parts = address.split(':');
-    let ip = '';
-    let port = '';
-
-    if (parts.length === 2 && parts[1].length > 0 && !isNaN(parseInt(parts[1]))) {
-        ip = parts[0];
-        port = parts[1];
-    } else if (parts.length === 1) {
-        ip = parts[0];
-        port = '443';
-    } else {
-        alert('接続アドレスは「ホスト名:ポート番号」または「ホスト名」の形式で入力してください。');
+// --- WebSocket通信 ---
+function connectToServer(address) {
+    if (ws) ws.close();
+    const protocol = address.startsWith('localhost') || address.startsWith('127.0.0.1') ? 'ws' : 'wss';
+    const fullAddress = `${protocol}://${address}`;
+    const connectionStatus = document.getElementById('connection-status');
+    if (connectionStatus) connectionStatus.textContent = '接続中...';
+    try {
+        ws = new WebSocket(fullAddress);
+    } catch (error) {
+        if (connectionStatus) connectionStatus.textContent = '未接続';
         return;
     }
-
-    if (game.socket) game.socket.close();
-
-    const isSecureHost = ip !== 'localhost' && ip !== '127.0.0.1';
-    const protocol = isSecureHost ? 'wss' : 'ws';
-
-    let url;
-
-    if (isSecureHost && (port === '443' || parts.length === 1)) {
-        url = `${protocol}://${ip}`;
-    }
-    else if (!isSecureHost && (port === '80' || parts.length === 1)) {
-        url = `${protocol}://${ip}`;
-    }
-    else {
-        url = `${protocol}://${ip}:${port}`;
-    }
-
-    game.socket = new WebSocket(url);
-
-    game.socket.onopen = () => {
-        console.log('サーバーに接続しました。');
-        hideConnectionModal();
-        document.getElementById('connection-status').textContent = '接続中...';
-        document.getElementById('connection-status').style.color = '#FF9800';
-
-        if (game.isHost) {
-            game.socket.send(JSON.stringify({
-                type: 'CREATE_ROOM',
-                bossMaxHp: game.bossMaxHp,
-                bossDamageMultiplier: game.bossDamageMultiplier
-            }));
-        } else {
-            game.socket.send(JSON.stringify({ type: 'JOIN_ROOM' }));
-        }
+    ws.onopen = () => {
+        changeScreen('lobby');
+        if (connectionStatus) connectionStatus.textContent = '接続済み';
+        if (screens['connection-modal']) screens['connection-modal'].classList.remove('active');
     };
-
-    game.socket.onmessage = (event) => {
+    ws.onmessage = (event) => {
         handleServerMessage(JSON.parse(event.data));
     };
-
-    game.socket.onerror = (e) => {
-        console.error('WebSocketエラー:', e);
-        document.getElementById('connection-status').textContent = '接続失敗';
-        document.getElementById('connection-status').style.color = '#F44336';
-        game.socket = null;
-        alert('サーバーへの接続に失敗しました。');
-        showScreen('title');
+    ws.onclose = () => {
+        alert('サーバーから切断されました。');
+        changeScreen('title');
+        game.players = {};
+        game.playerId = null;
+        if (connectionStatus) connectionStatus.textContent = '未接続';
     };
-
-    game.socket.onclose = () => {
-        console.log('サーバーとの接続が切れました。');
-        game.socket = null;
-        if (game.currentScreen === 'game' || game.currentScreen === 'lobby') {
-            alert('サーバーとの接続が切れました。タイトルに戻ります。');
-        }
-        showScreen('title');
+    ws.onerror = (error) => {
+        alert('接続エラーが発生しました。');
+        changeScreen('title');
+        if (screens['connection-modal']) screens['connection-modal'].classList.remove('active');
+        if (connectionStatus) connectionStatus.textContent = '未接続';
     };
 }
 
-function disconnectServer() {
-    if (game.socket) {
-        game.socket.close();
-    }
-    gameState.gameRunning = false;
-    showScreen('title');
-}
-
-function sendStartGameRequest() {
-    if (game.socket && game.socket.readyState === WebSocket.OPEN && game.isHost) {
-        game.socket.send(JSON.stringify({
-            type: 'START_GAME'
-        }));
-        document.getElementById('start-game-button').disabled = true;
-        document.getElementById('lobby-message').textContent = "ゲーム開始要求を送信しました...";
+function sendAction(type, payload = {}) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type, ...payload }));
     }
 }
-
-function sendAction(actionType, payload = {}) {
-    if (game.socket && game.socket.readyState === WebSocket.OPEN && game.playerId) {
-        game.socket.send(JSON.stringify({
-            type: actionType,
-            ...payload
-        }));
-        if (actionType === 'MOVE') {
-            playSound('move');
-        } else if (actionType.startsWith('SKILL')) {
-            playSound('skill');
-        } else if (actionType === 'JOB_SELECT') {
-            playSound('skill'); // 転職音
-        }
-    }
-}
-
 
 function handleServerMessage(data) {
     switch (data.type) {
-        case 'ROOM_READY':
-            game.playerId = data.yourId;
-            gameState.players = data.players; // 自身の初期情報を受け取る
-
-            document.getElementById('host-settings-panel').style.display = game.isHost ? 'block' : 'none';
-
-            showScreen('lobby');
-            updateLobbyStatus(data.players);
+        case 'INITIAL_STATE':
+            game.playerId = data.playerId;
+            game.jobData = data.jobData;
+            game.isHost = data.isHost; // サーバーからのホストフラグを使用
+            game.bossSettings = data.bossSettings || {};
+            updateJobSelectionUI();
+            break;
+            
+        case 'LOBBY_STATE':
+            game.players = data.players.reduce((acc, p) => { acc[p.id] = p; return acc; }, {});
+            game.isGameRunning = data.isGameRunning;
+            // ホスト判定: プレイヤーリストの最初のIDが自分のIDと一致するか
+            const hostId = data.players.length > 0 ? data.players[0].id : null;
+            game.isHost = game.playerId === hostId;
+            
+            game.bossSettings = data.bossSettings || {};
+            updateLobbyUI(); // UI更新関数を呼び出す
+            // ★ 修正前: LOBBY_STATEで画面遷移しようとしていたが、サーバーはGAME_STATEに切り替わるため削除
+            // if (game.isGameRunning) { changeScreen('game'); } 
             break;
 
-        case 'LOBBY_UPDATE':
-            gameState.players = data.players;
-            updateLobbyStatus(data.players);
+        case 'GAME_STATE':
+            game.players = data.players.reduce((acc, p) => { acc[p.id] = p; return acc; }, {});
+            game.boss = data.boss;
+            game.isGameRunning = data.isGameRunning;
+            game.gameStartTime = data.gameStartTime;
+            game.jobData = data.jobData;
+            game.activeAttacks = data.activeAttacks || [];
+            
+            // ★ 修正: GAME_STATEを受け取り、isGameRunningなら画面遷移する
+            if (game.isGameRunning) {
+                changeScreen('game');
+            }
             break;
 
-        case 'GAME_START':
-            gameState.players = data.players;
-            gameState.boss = data.boss;
-            gameState.gameRunning = true;
-            gameState.startTime = Date.now();
-            showScreen('game');
-            // 開始直後の状態をリセット
-            gameState.projectiles = [];
-            gameState.bossAttacks = [];
-            break;
-
-        case 'GAME_STATE_UPDATE':
-            // サーバーから送られてきた状態をマージ
-            Object.assign(gameState.players, data.players);
-            gameState.boss = data.boss;
-            gameState.projectiles = data.projectiles;
-            gameState.bossAttacks = data.bossAttacks;
-            gameState.gameRunning = data.gameRunning;
-
-            // UIの更新
-            document.getElementById('boss-hp-display').textContent = `${gameState.boss.hp.toLocaleString()} / ${gameState.boss.maxHp.toLocaleString()}`;
-            break;
-
-        case 'GAME_OVER':
-            // WIN/LOSE
-            gameState.gameRunning = false;
-            completeLevel(data.result, data.stats);
-            break;
-
-        case 'ERROR':
-            alert(`エラー: ${data.message}`);
-            disconnectServer();
+        case 'GAME_END':
+            completeLevel(data.result, data.stats, data.jobData);
+            changeScreen('result');
             break;
     }
 }
 
-// --- ロビー画面の描画と管理 ---
-const JOB_AREAS = {
-    MELEE: { x: LOBBY_CANVAS_SIZE * 0.2, y: LOBBY_CANVAS_SIZE * 0.5, radius: 50 },
-    RANGED: { x: LOBBY_CANVAS_SIZE * 0.8, y: LOBBY_CANVAS_SIZE * 0.5, radius: 50 },
-    HEALER: { x: LOBBY_CANVAS_SIZE * 0.5, y: LOBBY_CANVAS_SIZE * 0.2, radius: 50 },
-    SUPPORT: { x: LOBBY_CANVAS_SIZE * 0.5, y: LOBBY_CANVAS_SIZE * 0.8, radius: 50 }
-};
+// --- 描画ヘルパー関数 (省略) ---
+function drawHealthBar(ctx, x, y, width, height, percent, color) { /* ... */ }
+function drawAttackRange(ctx, x, y, range, color) { /* ... */ }
+function drawAutoAttackBeam(ctx, x1, y1, x2, y2, color) { /* ... */ }
+function drawSkillCooldowns(ctx, player, jobData) { /* ... */ }
 
-function renderLobby() {
-    const ctx = game.lobbyCtx;
-    const canvas = game.lobbyCanvas;
-    if (!ctx) return;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#111';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+// --- ロビー画面の描画 ---
+function drawLobby() { 
+    if (!lobbyCtx || game.currentScreen !== 'lobby') return;
+    
+    // 背景を白で塗りつぶす
+    lobbyCtx.fillStyle = '#FFFFFF'; 
+    lobbyCtx.fillRect(0, 0, LOBBY_CANVAS_SIZE, LOBBY_CANVAS_SIZE);
 
-    const myPlayer = gameState.players[game.playerId];
+    // ロビーの境界線
+    lobbyCtx.strokeStyle = '#333';
+    lobbyCtx.lineWidth = 5;
+    lobbyCtx.strokeRect(0, 0, LOBBY_CANVAS_SIZE, LOBBY_CANVAS_SIZE);
 
-    // ダミー敵 (中央)
-    drawCircle(ctx, canvas.width / 2, canvas.height / 2, BOSS_RADIUS, 'gray', 'white');
+    // 1. ダミーの敵 (ボス) を中央に配置
+    const dummyBoss = { x: LOBBY_CANVAS_SIZE / 2, y: LOBBY_CANVAS_SIZE / 2 };
+    lobbyCtx.beginPath();
+    lobbyCtx.arc(dummyBoss.x, dummyBoss.y, LOBBY_DUMMY_BOSS_RADIUS, 0, Math.PI * 2);
+    lobbyCtx.fillStyle = '#C0C0C0';
+    lobbyCtx.fill();
+    lobbyCtx.strokeStyle = '#333';
+    lobbyCtx.lineWidth = 3;
+    lobbyCtx.stroke();
+    lobbyCtx.fillStyle = '#000';
+    lobbyCtx.font = 'bold 16px Arial';
+    lobbyCtx.textAlign = 'center';
+    lobbyCtx.fillText('ダミーボス', dummyBoss.x, dummyBoss.y + 5);
 
-    // 職業選択エリア
-    let currentOverlapJob = null;
-    Object.keys(JOB_AREAS).forEach(jobKey => {
-        const area = JOB_AREAS[jobKey];
-        const job = JOB_DATA[jobKey];
 
-        // 転職サークル
-        drawCircle(ctx, area.x, area.y, area.radius, job.color, job.color + '50');
+    const myPlayer = game.players[game.playerId];
+    if (myPlayer) {
+        const myJobKey = myPlayer.job;
 
-        // 職業名テキスト
-        ctx.fillStyle = 'white';
-        ctx.font = '16px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(job.name, area.x, area.y + area.radius + 20);
+        // 2. 職業選択のインタラクト (四方) を配置
+        Object.keys(JOB_INTERACT_POSITIONS).forEach(jobKey => {
+            const pos = JOB_INTERACT_POSITIONS[jobKey];
+            const isSelected = myJobKey === jobKey;
+            const jobData = game.jobData[jobKey];
 
-        // 自身のプレイヤーとエリアの距離判定
-        if (myPlayer) {
-            const dist = Math.sqrt(Math.pow(myPlayer.x - area.x, 2) + Math.pow(myPlayer.y - area.y, 2));
-            if (dist < PLAYER_RADIUS + area.radius) {
-                currentOverlapJob = jobKey;
-                // インタラクトUI表示 (自機中心)
-                ctx.fillStyle = 'white';
-                ctx.fillRect(myPlayer.x - 100, myPlayer.y - 150, 200, 140);
-                
-                ctx.fillStyle = 'black';
-                ctx.font = '16px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText(`[E] で ${job.name} に転職`, myPlayer.x, myPlayer.y - 130);
-                
-                ctx.font = '14px Arial';
-                ctx.fillText(job.description, myPlayer.x, myPlayer.y - 100);
+            const dist = Math.sqrt(
+                Math.pow(myPlayer.x - pos.x, 2) + Math.pow(myPlayer.y - pos.y, 2)
+            );
+            
+            // インタラクト可能範囲の表示
+            lobbyCtx.beginPath();
+            lobbyCtx.arc(pos.x, pos.y, JOB_INTERACT_DISTANCE, 0, Math.PI * 2);
+            lobbyCtx.strokeStyle = isSelected ? jobData.color + '80' : 'rgba(0, 0, 0, 0.1)';
+            lobbyCtx.lineWidth = 1;
+            lobbyCtx.stroke();
+            
+            // インタラクト円の描画
+            lobbyCtx.beginPath();
+            lobbyCtx.arc(pos.x, pos.y, 10, 0, Math.PI * 2);
+            lobbyCtx.fillStyle = isSelected ? jobData.color : '#6c757d';
+            lobbyCtx.fill();
+            
+            // 職業名
+            lobbyCtx.fillStyle = '#333';
+            lobbyCtx.font = '14px Arial';
+            lobbyCtx.textAlign = 'center';
+            lobbyCtx.fillText(jobData.name, pos.x, pos.y - 15);
+
+            // 近づいたプレイヤーに詳細を表示 (自身にのみ)
+            if (dist < JOB_INTERACT_DISTANCE + PLAYER_RADIUS) {
+                lobbyCtx.fillStyle = '#000';
+                lobbyCtx.font = '12px Arial';
+                lobbyCtx.textAlign = 'center';
+                lobbyCtx.fillText(`[E]で転職: ${jobData.description}`, pos.x, pos.y + 25);
+            }
+        });
+
+        // 3. 選択中のプレイヤーの通常攻撃射程を表示
+        if (myJobKey) {
+            const range = game.jobData[myJobKey].range;
+            drawAttackRange(lobbyCtx, myPlayer.x, myPlayer.y, range, myPlayer.color);
+            
+            // 4. ダミーボスへの自動攻撃アニメーション
+            const distToBoss = Math.sqrt(
+                Math.pow(myPlayer.x - dummyBoss.x, 2) + Math.pow(myPlayer.y - dummyBoss.y, 2)
+            );
+            if (distToBoss < range + LOBBY_DUMMY_BOSS_RADIUS) {
+                 drawAutoAttackBeam(lobbyCtx, myPlayer.x, myPlayer.y, dummyBoss.x, dummyBoss.y, myPlayer.color);
             }
         }
-    });
-
-    // プレイヤーを描画
-    Object.values(gameState.players).forEach(p => {
-        if (!p) return;
-        drawPlayer(ctx, p, p.color);
-
-        // プレイヤーIDと職業名
-        ctx.fillStyle = 'white';
-        ctx.font = '12px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(p.id + (p.job ? ` (${JOB_DATA[p.job].name})` : '[未選択]'), p.x, p.y + PLAYER_RADIUS + 15);
-
-        // 自身の場合、オートアタック範囲を表示
-        if (p.id === game.playerId && p.job) {
-            drawAutoAttackRange(ctx, p, true);
-        }
-    });
-
-    // プレイヤーが現在接触しているジョブを保存
-    if (myPlayer) {
-        myPlayer.overlapJob = currentOverlapJob;
     }
-}
-
-function updateLobbyStatus(playersData) {
-    const playerList = document.getElementById('lobby-player-list');
-    const startButton = document.getElementById('start-game-button');
-    const lobbyMessage = document.getElementById('lobby-message');
-    const playerIds = Object.keys(playersData).sort();
-    const playerCount = playerIds.length;
-
-    playerList.innerHTML = `<h4>参加プレイヤー (${playerCount}人):</h4>`;
     
-    playerIds.forEach(id => {
-        const isMe = id === game.playerId;
-        const player = playersData[id];
-        if (!player) return;
-
-        const playerDiv = document.createElement('p');
-        playerDiv.style.color = player.color;
-        playerDiv.style.fontWeight = 'bold';
-        playerDiv.textContent = `▶︎ ${id} ${isMe ? '(あなた)' : ''} ${player.job ? `[${JOB_DATA[player.job].name}]` : '[未選択]'}`;
-        playerList.appendChild(playerDiv);
+    // 5. プレイヤーを描画 (ロビー)
+    Object.values(game.players).forEach(player => {
+        const isSelf = player.id === game.playerId;
+        
+        lobbyCtx.beginPath();
+        lobbyCtx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+        lobbyCtx.fillStyle = player.color || '#555';
+        lobbyCtx.fill();
+        lobbyCtx.strokeStyle = isSelf ? '#FFD700' : '#111'; // 自機を強調 (金の縁)
+        lobbyCtx.lineWidth = isSelf ? 4 : 2;
+        lobbyCtx.stroke();
+        
+        lobbyCtx.fillStyle = '#333';
+        lobbyCtx.font = '12px Arial';
+        lobbyCtx.textAlign = 'center';
+        lobbyCtx.fillText(player.name, player.x, player.y - PLAYER_RADIUS - 5);
     });
+    
+    requestAnimationFrame(drawLobby);
+}
 
-    if (game.isHost) {
-        if (playerCount >= 1) { // 1人でもデバッグできるように
-            startButton.style.display = 'block';
-            startButton.disabled = false;
-            lobbyMessage.textContent = "準備完了！[ゲーム開始] または [Enter] キーを押してください。";
-        } else {
-            startButton.style.display = 'none';
-            lobbyMessage.textContent = "他のプレイヤーの参加を待っています...";
-        }
-    } else {
+
+// --- ゲーム画面の描画 (省略) ---
+function drawGame() { /* ... */ }
+
+// --- UI更新関数 ---
+function updateJobSelectionUI() {
+    // 職業ボタンのUIを更新するロジック (省略)
+}
+
+function updateLobbyUI() {
+    const startButton = document.getElementById('start-game-button');
+    const hostSettingsPanel = document.getElementById('host-settings-panel');
+    const playerListDiv = document.getElementById('lobby-player-list');
+    
+    // 1. 参加プレイヤーリストの更新
+    if (playerListDiv) {
+        const playerArray = Object.values(game.players);
+        const hostId = playerArray.length > 0 ? playerArray[0].id : null;
+        let playerListHTML = '<h4>参加プレイヤー: ' + playerArray.length + '人</h4>';
+        playerListHTML += '<ul>';
+        playerArray.forEach(p => {
+            const status = p.job ? `✅ ${game.jobData[p.job].name}` : '❌ 職業未選択';
+            const isHostLabel = p.id === hostId ? ' (ホスト)' : ''; 
+            playerListHTML += `<li><span style="color: ${p.color}; font-weight: bold;">■</span> ${p.name}${isHostLabel}: ${status}</li>`;
+        });
+        playerListHTML += '</ul>';
+        playerListDiv.innerHTML = playerListHTML;
+    }
+    
+    // 2. ホスト専用UIの表示/非表示とボタン有効化
+    if (game.isHost && startButton) {
+        startButton.style.display = 'block';
+        if (hostSettingsPanel) hostSettingsPanel.style.display = 'block';
+
+        // ゲーム開始ボタンの有効化判定: 全員が職業を選択しているか
+        const activePlayers = Object.values(game.players).length;
+        const allReady = activePlayers > 0 && Object.values(game.players).every(p => p.job && p.job !== null);
+        
+        startButton.disabled = !allReady;
+        startButton.textContent = allReady ? 'ゲーム開始' : '職業未選択のプレイヤーがいます';
+        
+    } else if (startButton) {
         startButton.style.display = 'none';
-        lobbyMessage.textContent = "ホストの操作を待っています...";
+        if (hostSettingsPanel) hostSettingsPanel.style.display = 'none';
+    }
+    
+    setupHostSettingsListeners(); // ホスト設定のUI値を更新
+}
+
+function completeLevel(result, stats, jobData) { 
+    // リザルト画面の表示ロジック (省略)
+    const resultTitle = document.getElementById('result-title');
+    const resultMessage = document.getElementById('result-message');
+    const resultTableBody = document.querySelector('#result-table tbody');
+
+    if (result === 'WIN') {
+        resultTitle.textContent = '🏆 勝利！';
+        resultMessage.textContent = 'YOU WIN!';
+        resultMessage.style.color = 'green';
+    } else {
+        resultTitle.textContent = '💀 敗北...';
+        resultMessage.textContent = 'GAME OVER.';
+        resultMessage.style.color = 'red';
+    }
+
+    if (resultTableBody) {
+        resultTableBody.innerHTML = '';
+        Object.values(stats).forEach(stat => {
+            const row = resultTableBody.insertRow();
+            row.insertCell().textContent = game.players[stat.id] ? game.players[stat.id].name : stat.id.substring(0, 4);
+            row.insertCell().textContent = jobData[stat.job] ? jobData[stat.job].name : 'N/A';
+            row.insertCell().textContent = stat.deaths;
+            row.insertCell().textContent = stat.damageDealt.toLocaleString();
+            row.insertCell().textContent = stat.healingDone.toLocaleString();
+        });
     }
 }
 
-// ロビーで [E] キーが押されたときにジョブ選択を試みる
-function attemptJobSelect() {
-    const myPlayer = gameState.players[game.playerId];
-    if (myPlayer && myPlayer.overlapJob) {
-        sendAction('JOB_SELECT', { job: myPlayer.overlapJob });
-    }
-}
 
+// --- UI/入力処理 ---
 
-// --- 入力処理 (修正・追加) ---
+const keys = {};
 
-/**
- * キーボードとゲームパッドの入力を処理し、サーバーに移動アクションを送信する
- */
 function handleMovementInput() {
-    if (game.currentScreen !== 'lobby' && game.currentScreen !== 'game') return;
-    if (Date.now() < game.lastMoveTime + MOVE_DELAY) return;
+    // ... (移動入力ロジック)
+    if (!game.playerId || !game.players[game.playerId]) return;
+    if (Date.now() - game.lastMoveTime < MOVE_DELAY) return; 
 
     let dx = 0;
     let dy = 0;
+    if (keys['w'] || keys['W'] || keys['ArrowUp']) dy -= 1;
+    if (keys['s'] || keys['S'] || keys['ArrowDown']) dy += 1;
+    if (keys['a'] || keys['A'] || keys['ArrowLeft']) dx -= 1;
+    if (keys['d'] || keys['D'] || keys['ArrowRight']) dx += 1;
 
-    // 1. キーボード入力
-    if (keysPressed['KeyW'] || keysPressed['ArrowUp']) dy -= 1;
-    if (keysPressed['KeyS'] || keysPressed['ArrowDown']) dy += 1;
-    if (keysPressed['KeyA'] || keysPressed['ArrowLeft']) dx -= 1;
-    if (keysPressed['KeyD'] || keysPressed['ArrowRight']) dx += 1;
-
-    // 2. ゲームパッド入力
-    const gamepad = navigator.getGamepads()[0];
-    if (gamepad) {
-        // アナログスティック (左スティック: Axes 0, 1)
-        const axesX = gamepad.axes[0];
-        const axesY = gamepad.axes[1];
-
-        if (Math.abs(axesX) > MOVE_THRESHOLD) dx += axesX;
-        if (Math.abs(axesY) > MOVE_THRESHOLD) dy += axesY;
-        
-        // 十字キー/方向ボタン (Buttons 12, 13, 14, 15)
-        if (gamepad.buttons[12]?.pressed) dy -= 1; // Up
-        if (gamepad.buttons[13]?.pressed) dy += 1; // Down
-        if (gamepad.buttons[14]?.pressed) dx -= 1; // Left
-        if (gamepad.buttons[15]?.pressed) dx += 1; // Right
-
-        // スキル/攻撃ボタンもここで処理 (ゲーム中のみ)
-        if (game.currentScreen === 'game' && gameState.gameRunning) {
-            // A/X ボタン (Index 0) - オートアタック
-            if (gamepad.buttons[0]?.pressed) sendAction('AUTO_ATTACK');
-            // B/O ボタン (Index 1) - スキル1
-            if (gamepad.buttons[1]?.pressed) sendAction('SKILL_1');
-            // Y/△ ボタン (Index 3) - スキル2
-            if (gamepad.buttons[3]?.pressed) sendAction('SKILL_2');
-            // X/□ ボタン (Index 2) - スーパー
-            if (gamepad.buttons[2]?.pressed) sendAction('SUPER');
-        }
-    }
-
-    // 3. 移動の正規化と送信
     if (dx !== 0 || dy !== 0) {
-        // 正規化 (斜め移動の速度を抑える)
         const magnitude = Math.sqrt(dx * dx + dy * dy);
         const normalizedDx = dx / magnitude;
         const normalizedDy = dy / magnitude;
-
-        sendAction('MOVE', { dx: normalizedDx, dy: normalizedDy });
+        const actionType = game.currentScreen === 'lobby' ? 'MOVE_LOBBY' : 'MOVE';
+        sendAction(actionType, { dx: normalizedDx, dy: normalizedDy });
         game.lastMoveTime = Date.now();
     }
 }
 
-
-/**
- * キーダウンイベントハンドラ (移動キーの状態記録とアクションキーの即時処理)
- * @param {KeyboardEvent} event 
- */
-function handleKeyDown(event) {
-    // ロビー画面での Enter キーによるゲーム開始
-    if (game.currentScreen === 'lobby' && game.isHost && event.code === 'Enter') {
-        const startButton = document.getElementById('start-game-button');
-        if (startButton && startButton.style.display !== 'none' && !startButton.disabled) {
-            sendStartGameRequest();
+function trySelectJobByInteraction() {
+    const myPlayer = game.players[game.playerId];
+    if (!myPlayer || myPlayer.job) return;
+    
+    Object.keys(JOB_INTERACT_POSITIONS).forEach(jobKey => {
+        const pos = JOB_INTERACT_POSITIONS[jobKey];
+        const dist = Math.sqrt(
+            Math.pow(myPlayer.x - pos.x, 2) + Math.pow(myPlayer.y - pos.y, 2)
+        );
+        
+        if (dist < JOB_INTERACT_DISTANCE + PLAYER_RADIUS) {
+            sendAction('SELECT_JOB', { jobKey });
         }
-        event.preventDefault();
-        return;
-    }
+    });
+}
 
-    // ロビーでの転職
-    if (event.code === 'KeyE' && game.currentScreen === 'lobby') {
-        attemptJobSelect();
-        event.preventDefault();
-        return;
-    }
-
-    // 移動キーの状態記録 (ロビー/ゲーム共通)
-    if (MOVEMENT_KEYS.includes(event.code)) {
-        keysPressed[event.code] = true;
+// ホスト設定スライダーのイベントリスナー
+function setupHostSettingsListeners() {
+    const bossHpSlider = document.getElementById('boss-hp');
+    const bossHpValueSpan = document.getElementById('boss-hp-value');
+    
+    if (bossHpSlider && bossHpValueSpan) {
+        bossHpSlider.removeEventListener('input', handleBossHpChange);
+        bossHpSlider.addEventListener('input', handleBossHpChange);
+        // 初期値/ホスト設定でUIを更新
+        bossHpSlider.value = game.bossSettings.maxHpMultiplier || 10;
+        const initialHpValue = (parseFloat(bossHpSlider.value) * 1000).toLocaleString();
+        bossHpValueSpan.textContent = `${initialHpValue} (x${bossHpSlider.value})`;
     }
     
-    // ゲーム中のスキル発動
-    if (game.currentScreen === 'game' && gameState.gameRunning) {
-        if (event.code === 'Space') {
-            sendAction('AUTO_ATTACK'); // 通常攻撃
-            event.preventDefault();
-        } else if (event.code === 'KeyQ') {
-            sendAction('SKILL_1');
-            event.preventDefault();
-        } else if (event.code === 'KeyR') {
-            sendAction('SKILL_2');
-            event.preventDefault();
-        } else if (event.code === 'KeyF') {
-            sendAction('SUPER');
-            event.preventDefault();
-        }
-    }
-}
-
-/**
- * キーアップイベントハンドラ (移動キーの状態解除)
- * @param {KeyboardEvent} event 
- */
-function handleKeyUp(event) {
-    if (MOVEMENT_KEYS.includes(event.code)) {
-        keysPressed[event.code] = false;
-    }
-}
-
-/**
- * ゲームパッドとキーボードのポーリングを開始する
- */
-function startGamepadPolling() {
-    if (game.gamepadInterval) clearInterval(game.gamepadInterval);
+    const bossDamageSlider = document.getElementById('boss-damage');
+    const bossDamageValueSpan = document.getElementById('boss-damage-value');
     
-    // MOVE_DELAYと同じ頻度で移動入力を処理することで、滑らかな動きを実現
-    game.gamepadInterval = setInterval(handleMovementInput, MOVE_DELAY); 
+    if (bossDamageSlider && bossDamageValueSpan) {
+        bossDamageSlider.removeEventListener('input', handleBossDamageChange);
+        bossDamageSlider.addEventListener('input', handleBossDamageChange);
+        // 初期値/ホスト設定でUIを更新
+        bossDamageSlider.value = game.bossSettings.damageMultiplier || 1.0;
+        bossDamageValueSpan.textContent = `${parseFloat(bossDamageSlider.value).toFixed(1)}倍`;
+    }
+}
+const handleBossHpChange = (e) => {
+    const value = parseFloat(e.target.value);
+    const displayValue = (value * 1000).toLocaleString();
+    document.getElementById('boss-hp-value').textContent = `${displayValue} (x${value.toFixed(0)})`;
+    sendAction('SET_BOSS_HP', { multiplier: value });
+};
+const handleBossDamageChange = (e) => {
+    const value = parseFloat(e.target.value);
+    document.getElementById('boss-damage-value').textContent = `${value.toFixed(1)}倍`;
+    sendAction('SET_BOSS_DAMAGE', { multiplier: value });
+};
 
-    // ゲームパッドの状態表示を更新するロジック
-    setInterval(() => {
-        const gamepad = navigator.getGamepads()[0];
-        const statusElement = document.getElementById('gamepad-status');
-        if (statusElement) {
-            if (gamepad) {
-                statusElement.textContent = `コントローラー: ${gamepad.id} 接続済み`;
-                statusElement.style.color = '#4CAF50';
-            } else {
-                statusElement.textContent = 'コントローラー: 未接続 (キーボード操作)';
-                statusElement.style.color = '#FF9800';
+
+document.addEventListener('DOMContentLoaded', () => {
+    // DOM要素の取得と初期化
+    screens['connection-modal'] = document.getElementById('connection-modal');
+    screens['title'] = document.getElementById('title-screen');
+    screens['lobby'] = document.getElementById('lobby-screen');
+    screens['game'] = document.getElementById('game-screen');
+    screens['result'] = document.getElementById('result-screen');
+
+    lobbyCanvas = document.getElementById('lobby-canvas');
+    if (lobbyCanvas) lobbyCtx = lobbyCanvas.getContext('2d');
+    gameCanvas = document.getElementById('game-canvas');
+    if (gameCanvas) gameCtx = gameCanvas.getContext('2d');
+    
+    selectJobButtons['MELEE'] = document.getElementById('select-melee');
+    selectJobButtons['RANGED'] = document.getElementById('select-ranged');
+    selectJobButtons['HEALER'] = document.getElementById('select-healer');
+    selectJobButtons['SUPPORTER'] = document.getElementById('select-supporter'); 
+
+    // UIイベントリスナー
+    document.getElementById('join-room-button').addEventListener('click', () => {
+        screens['connection-modal'].classList.add('active');
+        document.getElementById('server-address').focus();
+    });
+    document.getElementById('create-room-button').addEventListener('click', () => {
+        screens['connection-modal'].classList.add('active');
+        document.getElementById('server-address').value = 'localhost:8080';
+        document.getElementById('server-address').focus();
+    });
+    document.getElementById('connection-cancel').addEventListener('click', () => {
+        screens['connection-modal'].classList.remove('active');
+    });
+    document.getElementById('connect-submit').addEventListener('click', () => {
+        const address = document.getElementById('server-address').value;
+        connectToServer(address);
+    });
+    document.getElementById('start-game-button').addEventListener('click', () => {
+        sendAction('START_GAME');
+    });
+    document.getElementById('lobby-disconnect-button').addEventListener('click', () => {
+        if (ws) ws.close();
+        changeScreen('title');
+    });
+    document.getElementById('back-to-title').addEventListener('click', () => {
+        if (ws) ws.close();
+        changeScreen('title');
+    });
+    document.getElementById('back-to-select-clear').addEventListener('click', () => {
+        if (ws) ws.close(); 
+        changeScreen('title'); 
+    });
+
+    // 職業ボタンリスナー
+    Object.keys(selectJobButtons).forEach(jobKey => {
+        const button = selectJobButtons[jobKey];
+        if (button) {
+            button.addEventListener('click', () => {
+                sendAction('SELECT_JOB', { jobKey });
+            });
+        }
+    });
+
+    // キーボードイベントリスナー
+    document.addEventListener('keydown', (e) => {
+        keys[e.key.toLowerCase()] = true;
+        
+        // Eキーでロビーでの転職を試みる
+        if (e.key === 'e' || e.key === 'E') {
+            if (game.currentScreen === 'lobby') {
+                 trySelectJobByInteraction();
             }
         }
-    }, 500);
-}
+        
+        // スキルキー
+        if (game.currentScreen === 'game' && game.isGameRunning) {
+            let skillKey;
+            if (e.key === '1') skillKey = 'skill1';
+            else if (e.key === '2') skillKey = 'skill2';
+            else if (e.key === '3') skillKey = 'super';
 
-function updateGamepadStatus() {
-    // Gamepad接続/切断イベント発生時にコンソールに出力
-    const gamepads = navigator.getGamepads();
-    if (gamepads.length > 0 && gamepads[0]) {
-        console.log("Gamepad connected at index %d: %s. %d buttons, %d axes.",
-                    gamepads[0].index, gamepads[0].id,
-                    gamepads[0].buttons.length, gamepads[0].axes.length);
-    } else {
-        console.log("Gamepad disconnected.");
-    }
-    // startGamepadPollingが既に実行されているため、ここでは特別な処理は不要
-}
-
-// --- ゲーム画面の描画 ---
-function gameRenderLoop() {
-    // 描画がロビー/ゲームで異なるため、現在の状態に応じて処理を分ける
-    if (game.currentScreen === 'game') {
-        renderGame();
-    } else if (game.currentScreen === 'lobby') {
-        renderLobby();
-    }
-}
-
-function renderGame() {
-    const ctx = game.gameCtx;
-    const canvas = game.gameCanvas;
-    const myPlayer = gameState.players[game.playerId];
-    if (!ctx || !myPlayer) return;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // 画面の中心をプレイヤーに合わせるためのオフセット計算
-    const offsetX = canvas.width / 2 - myPlayer.x;
-    const offsetY = canvas.height / 2 - myPlayer.y;
-
-    // Bossの描画
-    if (gameState.boss) {
-        drawBoss(ctx, gameState.boss, offsetX, offsetY);
-    }
-
-    // Projectileの描画
-    gameState.projectiles.forEach(p => {
-        drawProjectile(ctx, p, offsetX, offsetY);
-    });
-
-    // Boss Attackの描画
-    gameState.bossAttacks.forEach(a => {
-        drawBossAttack(ctx, a, offsetX, offsetY);
-    });
-
-    // プレイヤーの描画
-    Object.values(gameState.players).forEach(p => {
-        drawPlayer(ctx, p, p.color, offsetX, offsetY);
-
-        // HPバー
-        const hpY = p.y - PLAYER_RADIUS - 15 + offsetY;
-        const hpX = p.x + offsetX; // HPバーはプレイヤーの中心に合わせる
-        drawHealthBar(ctx, hpX, hpY, p.hp / p.maxHp, p.id === game.playerId);
-    });
-
-    // 自身のプレイヤー情報UIの更新
-    updateGameUI(myPlayer);
-}
-
-function updateGameUI(player) {
-    // プレイヤーのHPとCOOLDOWN表示など
-    const hpElement = document.getElementById('player-hp-display');
-    const cdElement = document.getElementById('player-cooldowns');
-
-    if (hpElement) {
-        hpElement.textContent = `HP: ${player.hp} / ${player.maxHp}`;
-        hpElement.style.color = player.hp < player.maxHp * 0.3 ? '#F44336' : '#4CAF50';
-    }
-
-    if (cdElement) {
-        const now = Date.now();
-        let html = '';
-        if (player.job) {
-            // スキル1
-            const skill1CD = player.skill1.nextCastTime - now;
-            const skill1Name = JOB_DATA[player.job].skill1.name;
-            const skill1CDTime = Math.max(0, Math.ceil(skill1CD / 1000));
-            html += `<p>Q: ${skill1Name} (${skill1CDTime}s)</p>`;
-
-            // スキル2
-            const skill2CD = player.skill2.nextCastTime - now;
-            const skill2Name = JOB_DATA[player.job].skill2.name;
-            const skill2CDTime = Math.max(0, Math.ceil(skill2CD / 1000));
-            html += `<p>R: ${skill2Name} (${skill2CDTime}s)</p>`;
-
-            // スーパー
-            const superCD = player.super.nextCastTime - now;
-            const superName = JOB_DATA[player.job].super.name;
-            const superCDTime = Math.max(0, Math.ceil(superCD / 1000));
-            html += `<p>F: ${superName} (${superCDTime}s)</p>`;
-        } else {
-            html += '<p>職業を選択してください</p>';
-        }
-        cdElement.innerHTML = html;
-    }
-}
-
-// --- 描画ユーティリティ ---
-
-function drawCircle(ctx, x, y, r, fillColor, strokeColor) {
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = fillColor;
-    ctx.fill();
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-}
-
-function drawPlayer(ctx, p, color, offsetX = 0, offsetY = 0) {
-    const drawX = p.x + offsetX;
-    const drawY = p.y + offsetY;
-
-    // プレイヤー本体
-    drawCircle(ctx, drawX, drawY, PLAYER_RADIUS, color, 'white');
-
-    // 職業マーク (ロビーでは表示しない)
-    if (p.job && game.currentScreen === 'game') {
-        const job = JOB_DATA[p.job];
-        ctx.fillStyle = 'white';
-        ctx.font = '12px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(job.name.substring(0, 1), drawX, drawY + 4);
-    }
-}
-
-function drawBoss(ctx, boss, offsetX, offsetY) {
-    const drawX = boss.x + offsetX;
-    const drawY = boss.y + offsetY;
-
-    // ボス本体
-    drawCircle(ctx, drawX, drawY, BOSS_RADIUS, '#8B0000', '#F44336');
-
-    // HPバー
-    const hpY = drawY - BOSS_RADIUS - 10;
-    const hpX = drawX;
-    drawHealthBar(ctx, hpX, hpY, boss.hp / boss.maxHp, false, 150, 15);
-}
-
-function drawProjectile(ctx, p, offsetX, offsetY) {
-    const drawX = p.x + offsetX;
-    const drawY = p.y + offsetY;
-
-    drawCircle(ctx, drawX, drawY, p.radius, p.color, p.color);
-}
-
-function drawBossAttack(ctx, a, offsetX, offsetY) {
-    if (a.type === 'AOE') {
-        ctx.beginPath();
-        ctx.arc(a.x + offsetX, a.y + offsetY, a.radius, 0, Math.PI * 2);
-        ctx.fillStyle = a.warning ? 'rgba(255, 0, 0, 0.3)' : 'rgba(255, 0, 0, 0.8)';
-        ctx.fill();
-        ctx.strokeStyle = a.warning ? 'red' : 'white';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // 警告タイマー
-        if (a.warning && a.damageTime) {
-            const timeLeft = Math.ceil((a.damageTime - Date.now()) / 1000);
-            if (timeLeft > 0) {
-                ctx.fillStyle = 'white';
-                ctx.font = '30px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText(timeLeft, a.x + offsetX, a.y + offsetY + 10);
+            if (skillKey) {
+                sendAction('USE_SKILL', { skillKey });
             }
         }
-    }
-    // 他の攻撃タイプは省略
-}
-
-function drawAutoAttackRange(ctx, p, isLobby = false, offsetX = 0, offsetY = 0) {
-    const drawX = p.x + offsetX;
-    const drawY = p.y + offsetY;
-
-    ctx.beginPath();
-    ctx.arc(drawX, drawY, AUTO_ATTACK_RANGE, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    if (isLobby) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-        ctx.fill();
-    }
-}
-
-function drawHealthBar(ctx, x, y, percent, isMe, width = 60, height = 8) {
-    const color = isMe ? '#4CAF50' : (percent < 0.3 ? '#F44336' : '#FFEB3B');
-
-    // 背景
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    ctx.fillRect(x - width / 2, y, width, height);
-
-    // HPゲージ本体
-    ctx.fillStyle = color;
-    ctx.fillRect(x - width / 2, y, width * percent, height);
-
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x - width / 2, y, width, height);
-}
-
-
-// --- リザルト画面 ---
-function completeLevel(result, stats) {
-    playSound(result === 'WIN' ? 'win' : 'lose');
-
-    const title = document.getElementById('result-title');
-    const message = document.getElementById('result-message');
-    const resultTableBody = document.querySelector('#result-table tbody');
-
-    if (result === 'WIN') {
-        title.textContent = '🏆 勝利！';
-        message.textContent = 'ボスを討伐しました！';
-        title.style.color = '#4CAF50';
-    } else {
-        title.textContent = '💀 敗北...';
-        message.textContent = '全滅しました。';
-        title.style.color = '#F44336';
-    }
-
-    // テーブルの更新
-    resultTableBody.innerHTML = '';
-    Object.values(stats).forEach(playerStat => {
-        const row = resultTableBody.insertRow();
-        const jobName = playerStat.job ? JOB_DATA[playerStat.job].name : '未選択';
-
-        row.insertCell().textContent = playerStat.id;
-        row.insertCell().textContent = jobName;
-        row.insertCell().textContent = playerStat.deaths;
-        row.insertCell().textContent = playerStat.damageDealt.toLocaleString();
-        row.insertCell().textContent = playerStat.healDone.toLocaleString();
+    });
+    document.addEventListener('keyup', (e) => {
+        keys[e.key.toLowerCase()] = false;
     });
 
-    showScreen('result');
-}
+    // 移動ループを開始
+    setInterval(handleMovementInput, MOVE_DELAY);
+    
+    // ロビー描画の開始
+    requestAnimationFrame(drawLobby);
+});
