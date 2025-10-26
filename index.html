@@ -38,7 +38,6 @@
         <div class="lobby-container">
             <h2>準備部屋 (Lobby)</h2>
             <div id="lobby-main-area">
-                
                 <div id="lobby-player-list" class="lobby-panel">
                     <h4>参加プレイヤー (0人):</h4>
                 </div>
@@ -46,30 +45,53 @@
                 <div class="arena-preview">
                     <canvas id="lobby-canvas" width="600" height="600"></canvas>
                 </div>
-                
+            </div>
+
+            <div id="lobby-controls">
                 <div id="host-settings-panel" class="lobby-panel" style="display: none;">
-                    <h4>ボス設定</h4>
+                    <h4>ホスト設定</h4>
                     <div class="input-group">
-                        <label for="boss-hp">ボス最大HP (x1000):</label>
-                        <input type="range" id="boss-hp" min="5" max="50" value="10">
-                        <span id="boss-hp-value">10,000</span>
+                        <label for="boss-hp">ボスHP (x1000):</label>
+                        <input type="range" id="boss-hp" min="10" max="100" value="10" step="1">
+                        <span id="boss-hp-value">10,000 (x10)</span>
                     </div>
                     <div class="input-group">
-                        <label for="boss-damage">ボス攻撃倍率:</label>
-                        <input type="range" id="boss-damage" min="1" max="3" step="0.5" value="1.0">
+                        <label for="boss-damage">ボスダメージ倍率:</label>
+                        <input type="range" id="boss-damage" min="0.5" max="3.0" value="1.0" step="0.1">
                         <span id="boss-damage-value">1.0倍</span>
                     </div>
                 </div>
-            </div>
 
-            <div id="lobby-status-area">
-                <p id="lobby-message" style="font-weight: bold; color: #F44336; margin: 20px 0;">ホストの操作を待っています...</p>
-                <div class="lobby-buttons">
-                    <button id="start-game-button" class="menu-button" style="display: none;">ゲーム開始</button>
+                <div class="gamepad-info lobby-panel">
+                    <h3>操作説明</h3>
+                    <div id="keyboard-controls">
+                        <h4>⌨️ キーボード</h4>
+                        <p>移動: <b>WASD / 矢印キー</b></p>
+                        <p>通常攻撃: <b>スペースキー / P</b></p>
+                        <p>スキル1: <b>Q</b></p>
+                        <p>スキル2 (インタラクト): <b>E</b></p>
+                        <p>大技: <b>R</b></p>
+                    </div>
+                    
+                    <div id="gamepad-controls" style="display: none;">
+                        <h4>🎮 ゲームパッド (Xbox/PS)</h4>
+                        <p>移動: <b>左スティック / 十字キー</b></p>
+                        <p>通常攻撃: <b>A / X</b></p>
+                        <p>スキル1: <b>X / □</b></p>
+                        <p>スキル2 (インタラクト): <b>Y / △</b></p>
+                        <p>大技: <b>B / ○</b></p>
+                    </div>
+
+                    <p id="gamepad-status">コントローラー接続を確認中...</p>
+                </div>
+                <div id="lobby-message" style="margin-top: 10px; font-weight: bold; color: #764ba2;">
+                    ...
+                </div>
+                <div class="button-group">
+                    <button id="start-game-button" class="menu-button" style="display: none;" disabled>ゲーム開始</button>
                     <button id="lobby-disconnect-button" class="menu-button small" style="background: gray;">切断してタイトルに戻る</button>
                 </div>
             </div>
-            <div id="gamepad-status" style="margin-top: 10px; font-size: 0.9rem; color: #764ba2;">コントローラー接続を確認中...</div>
         </div>
     </div>
 

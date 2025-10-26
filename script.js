@@ -6,41 +6,43 @@ const LOBBY_CANVAS_SIZE = 600; // ロビー画面サイズ
 const PLAYER_RADIUS = 20;
 const BOSS_RADIUS = 50;
 const AUTO_ATTACK_RANGE = 200; // 通常攻撃射程
-const MOVE_DELAY = 100; // 移動入力の最小間隔 (ms)
+const MOVE_DELAY = 33; // 移動入力の最小間隔 (ms)
 const MOVE_THRESHOLD = 0.5; // ゲームパッドアナログスティックの閾値
+// [追加] プレイヤーの初期スポーン座標 (ロビー画面中央: 300)
+const PLAYER_SPAWN_CENTER_LOBBY = LOBBY_CANVAS_SIZE / 2;
 
 // 職業ごとの設定
 const JOB_DATA = {
-    MELEE: { 
-        name: '近接アタッカー', 
-        color: '#F44336', 
+    MELEE: {
+        name: '近接アタッカー',
+        color: '#F44336',
         description: '高耐久・高火力。ボスに密着して戦う。',
         autoAttackDamage: 5,
         skill1: { name: '突進', cd: 8000, range: 100 },
         skill2: { name: '防御', cd: 15000, duration: 3000 },
         super: { name: '大回転斬り', cd: 40000, range: 150 }
     },
-    RANGED: { 
-        name: '遠距離アタッカー', 
-        color: '#2196F3', 
+    RANGED: {
+        name: '遠距離アタッカー',
+        color: '#2196F3',
         description: '遠距離から継続攻撃。紙耐久。',
         autoAttackDamage: 2,
         skill1: { name: '連射', cd: 5000, count: 3 },
         skill2: { name: '後退ジャンプ', cd: 12000, distance: 150 },
         super: { name: '超精密射撃', cd: 45000, damage: 500 }
     },
-    HEALER: { 
-        name: 'ヒーラー', 
-        color: '#4CAF50', 
+    HEALER: {
+        name: 'ヒーラー',
+        color: '#4CAF50',
         description: '味方を回復。攻撃力は低い。',
         autoAttackDamage: 1,
         skill1: { name: '単体回復', cd: 7000, range: 300, heal: 100 },
         skill2: { name: '加速フィールド', cd: 20000, range: 150, duration: 5000 },
         super: { name: '全体大回復', cd: 60000, heal: 300 }
     },
-    SUPPORT: { 
-        name: 'サポーター', 
-        color: '#FF9800', 
+    SUPPORT: {
+        name: 'サポーター',
+        color: '#FF9800',
         description: 'デバフ/バフで味方を支援。',
         autoAttackDamage: 1,
         skill1: { name: '防御デバフ', cd: 10000, range: 250, duration: 8000 },
@@ -68,8 +70,8 @@ let game = {
     currentScreen: 'title',
     lastMoveTime: 0,
     gamepadInterval: null,
-    gameLoop: null, // 💡 修正: gameLoopをgameオブジェクトのプロパティとして定義
-    
+    gameLoop: null,
+
     // Canvas/Context
     gameCanvas: null,
     gameCtx: null,
@@ -85,6 +87,10 @@ let game = {
     bossMaxHp: 10000,
     bossDamageMultiplier: 1.0,
 };
+
+// キーボードの状態を管理するためのグローバル変数
+let keysPressed = {};
+const MOVEMENT_KEYS = ['KeyW', 'KeyS', 'KeyA', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 
 // --- 初期化とイベント設定 ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -111,7 +117,7 @@ function setupEventListeners() {
 
     // ホスト操作
     document.getElementById('start-game-button').addEventListener('click', sendStartGameRequest);
-    
+
     // ホスト設定の更新
     const bossHpInput = document.getElementById('boss-hp');
     const bossHpValueSpan = document.getElementById('boss-hp-value');
@@ -130,7 +136,10 @@ function setupEventListeners() {
     // 入力
     window.addEventListener("gamepadconnected", updateGamepadStatus);
     window.addEventListener("gamepaddisconnected", updateGamepadStatus);
-    window.addEventListener('keydown', handleKeyboardInput);
+
+    // キーボードの移動とアクション処理を分離
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
 }
 
 function initAudio() {
@@ -162,9 +171,9 @@ function initAudio() {
 function playSound(type) {
     if (!game.audioCtx || !game.masterGainNode) return;
     const oscillator = game.audioCtx.createOscillator();
-    const soundGainNode = game.audioCtx.createGain(); 
+    const soundGainNode = game.audioCtx.createGain();
     oscillator.connect(soundGainNode);
-    soundGainNode.connect(game.masterGainNode); 
+    soundGainNode.connect(game.masterGainNode);
 
     let freq, duration, initialVolume;
 
@@ -180,7 +189,7 @@ function playSound(type) {
     }
 
     oscillator.frequency.setValueAtTime(freq, game.audioCtx.currentTime);
-    soundGainNode.gain.setValueAtTime(initialVolume, game.audioCtx.currentTime); 
+    soundGainNode.gain.setValueAtTime(initialVolume, game.audioCtx.currentTime);
 
     oscillator.start();
     soundGainNode.gain.exponentialRampToValueAtTime(0.001, game.audioCtx.currentTime + duration);
@@ -193,7 +202,7 @@ function showScreen(screenName) {
     const screenElement = document.getElementById(`${screenName}-screen`);
     if (screenElement) screenElement.classList.add('active');
     game.currentScreen = screenName;
-    
+
     // 💡 修正: game.gameLoop を使用
     if (game.gameLoop) {
         clearInterval(game.gameLoop);
@@ -202,7 +211,7 @@ function showScreen(screenName) {
 
     if (screenName === 'lobby') {
         renderLobby();
-        game.gameLoop = setInterval(renderLobby, 1000/30); // ロビー描画ループ
+        game.gameLoop = setInterval(renderLobby, 1000 / 30); // ロビー描画ループ
     } else if (screenName === 'game') {
         game.gameLoop = setInterval(gameRenderLoop, 1000 / 60); // ゲーム描画ループ
         document.getElementById('game-canvas').focus();
@@ -222,11 +231,11 @@ function showConnectionModal(type) {
     submitButton.textContent = game.isHost ? '部屋を作成' : '接続して参加';
 
     if (game.isHost) {
-         addressInput.value = addressInput.value || 'localhost:8080';
+        addressInput.value = addressInput.value || 'localhost:8080';
     } else if (!addressInput.value) {
-         addressInput.value = '';
+        addressInput.value = '';
     }
-    
+
     document.getElementById('title-screen').classList.remove('active');
     modal.classList.add('active');
     addressInput.focus();
@@ -249,7 +258,7 @@ function connectToServer() {
         port = parts[1];
     } else if (parts.length === 1) {
         ip = parts[0];
-        port = '443'; 
+        port = '443';
     } else {
         alert('接続アドレスは「ホスト名:ポート番号」または「ホスト名」の形式で入力してください。');
         return;
@@ -258,22 +267,22 @@ function connectToServer() {
     if (game.socket) game.socket.close();
 
     const isSecureHost = ip !== 'localhost' && ip !== '127.0.0.1';
-    const protocol = isSecureHost ? 'wss' : 'ws'; 
-    
+    const protocol = isSecureHost ? 'wss' : 'ws';
+
     let url;
-    
+
     if (isSecureHost && (port === '443' || parts.length === 1)) {
         url = `${protocol}://${ip}`;
-    } 
+    }
     else if (!isSecureHost && (port === '80' || parts.length === 1)) {
-         url = `${protocol}://${ip}`;
+        url = `${protocol}://${ip}`;
     }
     else {
         url = `${protocol}://${ip}:${port}`;
     }
 
     game.socket = new WebSocket(url);
-    
+
     game.socket.onopen = () => {
         console.log('サーバーに接続しました。');
         hideConnectionModal();
@@ -281,7 +290,7 @@ function connectToServer() {
         document.getElementById('connection-status').style.color = '#FF9800';
 
         if (game.isHost) {
-            game.socket.send(JSON.stringify({ 
+            game.socket.send(JSON.stringify({
                 type: 'CREATE_ROOM',
                 bossMaxHp: game.bossMaxHp,
                 bossDamageMultiplier: game.bossDamageMultiplier
@@ -308,7 +317,7 @@ function connectToServer() {
         console.log('サーバーとの接続が切れました。');
         game.socket = null;
         if (game.currentScreen === 'game' || game.currentScreen === 'lobby') {
-             alert('サーバーとの接続が切れました。タイトルに戻ります。');
+            alert('サーバーとの接続が切れました。タイトルに戻ります。');
         }
         showScreen('title');
     };
@@ -325,7 +334,7 @@ function disconnectServer() {
 function sendStartGameRequest() {
     if (game.socket && game.socket.readyState === WebSocket.OPEN && game.isHost) {
         game.socket.send(JSON.stringify({
-            type: 'START_GAME' 
+            type: 'START_GAME'
         }));
         document.getElementById('start-game-button').disabled = true;
         document.getElementById('lobby-message').textContent = "ゲーム開始要求を送信しました...";
@@ -360,7 +369,7 @@ function handleServerMessage(data) {
             showScreen('lobby');
             updateLobbyStatus(data.players);
             break;
-        
+
         case 'LOBBY_UPDATE':
             gameState.players = data.players;
             updateLobbyStatus(data.players);
@@ -384,17 +393,17 @@ function handleServerMessage(data) {
             gameState.projectiles = data.projectiles;
             gameState.bossAttacks = data.bossAttacks;
             gameState.gameRunning = data.gameRunning;
-            
+
             // UIの更新
             document.getElementById('boss-hp-display').textContent = `${gameState.boss.hp.toLocaleString()} / ${gameState.boss.maxHp.toLocaleString()}`;
             break;
-            
+
         case 'GAME_OVER':
             // WIN/LOSE
             gameState.gameRunning = false;
             completeLevel(data.result, data.stats);
             break;
-        
+
         case 'ERROR':
             alert(`エラー: ${data.message}`);
             disconnectServer();
@@ -420,15 +429,16 @@ function renderLobby() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const myPlayer = gameState.players[game.playerId];
-    
+
     // ダミー敵 (中央)
     drawCircle(ctx, canvas.width / 2, canvas.height / 2, BOSS_RADIUS, 'gray', 'white');
-    
+
     // 職業選択エリア
+    let currentOverlapJob = null;
     Object.keys(JOB_AREAS).forEach(jobKey => {
         const area = JOB_AREAS[jobKey];
         const job = JOB_DATA[jobKey];
-        
+
         // 転職サークル
         drawCircle(ctx, area.x, area.y, area.radius, job.color, job.color + '50');
 
@@ -442,6 +452,7 @@ function renderLobby() {
         if (myPlayer) {
             const dist = Math.sqrt(Math.pow(myPlayer.x - area.x, 2) + Math.pow(myPlayer.y - area.y, 2));
             if (dist < PLAYER_RADIUS + area.radius) {
+                currentOverlapJob = jobKey;
                 // インタラクトUI表示 (自機中心)
                 ctx.fillStyle = 'white';
                 ctx.fillRect(myPlayer.x - 100, myPlayer.y - 150, 200, 140);
@@ -450,6 +461,7 @@ function renderLobby() {
                 ctx.font = '16px Arial';
                 ctx.textAlign = 'center';
                 ctx.fillText(`[E] で ${job.name} に転職`, myPlayer.x, myPlayer.y - 130);
+                
                 ctx.font = '14px Arial';
                 ctx.fillText(job.description, myPlayer.x, myPlayer.y - 100);
             }
@@ -458,36 +470,42 @@ function renderLobby() {
 
     // プレイヤーを描画
     Object.values(gameState.players).forEach(p => {
+        if (!p) return;
         drawPlayer(ctx, p, p.color);
-        
+
         // プレイヤーIDと職業名
         ctx.fillStyle = 'white';
         ctx.font = '12px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText(p.id + (p.job ? ` (${JOB_DATA[p.job].name})` : ''), p.x, p.y + PLAYER_RADIUS + 15);
+        ctx.fillText(p.id + (p.job ? ` (${JOB_DATA[p.job].name})` : '[未選択]'), p.x, p.y + PLAYER_RADIUS + 15);
 
         // 自身の場合、オートアタック範囲を表示
         if (p.id === game.playerId && p.job) {
-             drawAutoAttackRange(ctx, p, true);
+            drawAutoAttackRange(ctx, p, true);
         }
     });
+
+    // プレイヤーが現在接触しているジョブを保存
+    if (myPlayer) {
+        myPlayer.overlapJob = currentOverlapJob;
+    }
 }
 
 function updateLobbyStatus(playersData) {
     const playerList = document.getElementById('lobby-player-list');
     const startButton = document.getElementById('start-game-button');
     const lobbyMessage = document.getElementById('lobby-message');
-    
     const playerIds = Object.keys(playersData).sort();
     const playerCount = playerIds.length;
-    
-    playerList.innerHTML = `<h4>参加プレイヤー (${playerCount}人):</h4>`;
 
+    playerList.innerHTML = `<h4>参加プレイヤー (${playerCount}人):</h4>`;
+    
     playerIds.forEach(id => {
         const isMe = id === game.playerId;
         const player = playersData[id];
+        if (!player) return;
+
         const playerDiv = document.createElement('p');
-        
         playerDiv.style.color = player.color;
         playerDiv.style.fontWeight = 'bold';
         playerDiv.textContent = `▶︎ ${id} ${isMe ? '(あなた)' : ''} ${player.job ? `[${JOB_DATA[player.job].name}]` : '[未選択]'}`;
@@ -503,16 +521,86 @@ function updateLobbyStatus(playersData) {
             startButton.style.display = 'none';
             lobbyMessage.textContent = "他のプレイヤーの参加を待っています...";
         }
-    } 
-    else {
+    } else {
         startButton.style.display = 'none';
         lobbyMessage.textContent = "ホストの操作を待っています...";
     }
 }
 
+// ロビーで [E] キーが押されたときにジョブ選択を試みる
+function attemptJobSelect() {
+    const myPlayer = gameState.players[game.playerId];
+    if (myPlayer && myPlayer.overlapJob) {
+        sendAction('JOB_SELECT', { job: myPlayer.overlapJob });
+    }
+}
 
-// --- 入力処理 ---
-function handleKeyboardInput(event) {
+
+// --- 入力処理 (修正・追加) ---
+
+/**
+ * キーボードとゲームパッドの入力を処理し、サーバーに移動アクションを送信する
+ */
+function handleMovementInput() {
+    if (game.currentScreen !== 'lobby' && game.currentScreen !== 'game') return;
+    if (Date.now() < game.lastMoveTime + MOVE_DELAY) return;
+
+    let dx = 0;
+    let dy = 0;
+
+    // 1. キーボード入力
+    if (keysPressed['KeyW'] || keysPressed['ArrowUp']) dy -= 1;
+    if (keysPressed['KeyS'] || keysPressed['ArrowDown']) dy += 1;
+    if (keysPressed['KeyA'] || keysPressed['ArrowLeft']) dx -= 1;
+    if (keysPressed['KeyD'] || keysPressed['ArrowRight']) dx += 1;
+
+    // 2. ゲームパッド入力
+    const gamepad = navigator.getGamepads()[0];
+    if (gamepad) {
+        // アナログスティック (左スティック: Axes 0, 1)
+        const axesX = gamepad.axes[0];
+        const axesY = gamepad.axes[1];
+
+        if (Math.abs(axesX) > MOVE_THRESHOLD) dx += axesX;
+        if (Math.abs(axesY) > MOVE_THRESHOLD) dy += axesY;
+        
+        // 十字キー/方向ボタン (Buttons 12, 13, 14, 15)
+        if (gamepad.buttons[12]?.pressed) dy -= 1; // Up
+        if (gamepad.buttons[13]?.pressed) dy += 1; // Down
+        if (gamepad.buttons[14]?.pressed) dx -= 1; // Left
+        if (gamepad.buttons[15]?.pressed) dx += 1; // Right
+
+        // スキル/攻撃ボタンもここで処理 (ゲーム中のみ)
+        if (game.currentScreen === 'game' && gameState.gameRunning) {
+            // A/X ボタン (Index 0) - オートアタック
+            if (gamepad.buttons[0]?.pressed) sendAction('AUTO_ATTACK');
+            // B/O ボタン (Index 1) - スキル1
+            if (gamepad.buttons[1]?.pressed) sendAction('SKILL_1');
+            // Y/△ ボタン (Index 3) - スキル2
+            if (gamepad.buttons[3]?.pressed) sendAction('SKILL_2');
+            // X/□ ボタン (Index 2) - スーパー
+            if (gamepad.buttons[2]?.pressed) sendAction('SUPER');
+        }
+    }
+
+    // 3. 移動の正規化と送信
+    if (dx !== 0 || dy !== 0) {
+        // 正規化 (斜め移動の速度を抑える)
+        const magnitude = Math.sqrt(dx * dx + dy * dy);
+        const normalizedDx = dx / magnitude;
+        const normalizedDy = dy / magnitude;
+
+        sendAction('MOVE', { dx: normalizedDx, dy: normalizedDy });
+        game.lastMoveTime = Date.now();
+    }
+}
+
+
+/**
+ * キーダウンイベントハンドラ (移動キーの状態記録とアクションキーの即時処理)
+ * @param {KeyboardEvent} event 
+ */
+function handleKeyDown(event) {
     // ロビー画面での Enter キーによるゲーム開始
     if (game.currentScreen === 'lobby' && game.isHost && event.code === 'Enter') {
         const startButton = document.getElementById('start-game-button');
@@ -523,323 +611,276 @@ function handleKeyboardInput(event) {
         return;
     }
 
-    if (game.currentScreen === 'lobby') {
-        // ロビーでの移動と転職
-        let dx = 0, dy = 0;
-        switch (event.code) {
-            case 'KeyW': case 'ArrowUp': dy = -1; break;
-            case 'KeyS': case 'ArrowDown': dy = 1; break;
-            case 'KeyA': case 'ArrowLeft': dx = -1; break;
-            case 'KeyD': case 'ArrowRight': dx = 1; break;
-            case 'KeyE': 
-                attemptJobSelect();
-                event.preventDefault();
-                return;
-            default: return;
-        }
+    // ロビーでの転職
+    if (event.code === 'KeyE' && game.currentScreen === 'lobby') {
+        attemptJobSelect();
         event.preventDefault();
-        const now = Date.now();
-        if (now - game.lastMoveTime < MOVE_DELAY) return;
-        game.lastMoveTime = now;
-        
-        sendAction('MOVE_LOBBY', { dx: dx * 10, dy: dy * 10 });
-
-    } else if (game.currentScreen === 'game' && gameState.gameRunning) {
-        // ゲーム中の移動とスキル発動
-        const myPlayer = gameState.players[game.playerId];
-        if (!myPlayer || myPlayer.isDead) return;
-
-        let dx = 0, dy = 0;
-        let actionType = null;
-
-        switch (event.code) {
-            case 'KeyW': case 'ArrowUp': dy = -1; break;
-            case 'KeyS': case 'ArrowDown': dy = 1; break;
-            case 'KeyA': case 'ArrowLeft': dx = -1; break;
-            case 'KeyD': case 'ArrowRight': dx = 1; break;
-            case 'Digit1': actionType = 'SKILL1'; break;
-            case 'Digit2': actionType = 'SKILL2'; break;
-            case 'Digit3': actionType = 'SUPER'; break;
-            default: return;
-        }
-        event.preventDefault(); 
-        
-        if (actionType) {
-            sendAction(actionType);
-            return;
-        }
-
-        const now = Date.now();
-        if (now - game.lastMoveTime < MOVE_DELAY) return;
-        game.lastMoveTime = now;
-
-        sendAction('MOVE', { dx: dx * 10, dy: dy * 10 });
+        return;
     }
-}
 
-function attemptJobSelect() {
-    const myPlayer = gameState.players[game.playerId];
-    if (!myPlayer) return;
-
-    for (const jobKey in JOB_AREAS) {
-        const area = JOB_AREAS[jobKey];
-        const dist = Math.sqrt(Math.pow(myPlayer.x - area.x, 2) + Math.pow(myPlayer.y - area.y, 2));
-        
-        if (dist < PLAYER_RADIUS + area.radius) {
-            sendAction('JOB_SELECT', { job: jobKey });
-            break;
+    // 移動キーの状態記録 (ロビー/ゲーム共通)
+    if (MOVEMENT_KEYS.includes(event.code)) {
+        keysPressed[event.code] = true;
+    }
+    
+    // ゲーム中のスキル発動
+    if (game.currentScreen === 'game' && gameState.gameRunning) {
+        if (event.code === 'Space') {
+            sendAction('AUTO_ATTACK'); // 通常攻撃
+            event.preventDefault();
+        } else if (event.code === 'KeyQ') {
+            sendAction('SKILL_1');
+            event.preventDefault();
+        } else if (event.code === 'KeyR') {
+            sendAction('SKILL_2');
+            event.preventDefault();
+        } else if (event.code === 'KeyF') {
+            sendAction('SUPER');
+            event.preventDefault();
         }
     }
 }
 
+/**
+ * キーアップイベントハンドラ (移動キーの状態解除)
+ * @param {KeyboardEvent} event 
+ */
+function handleKeyUp(event) {
+    if (MOVEMENT_KEYS.includes(event.code)) {
+        keysPressed[event.code] = false;
+    }
+}
+
+/**
+ * ゲームパッドとキーボードのポーリングを開始する
+ */
 function startGamepadPolling() {
-    if (game.gamepadInterval) return;
-    game.gamepadInterval = setInterval(pollGamepads, 1000 / 60); 
+    if (game.gamepadInterval) clearInterval(game.gamepadInterval);
+    
+    // MOVE_DELAYと同じ頻度で移動入力を処理することで、滑らかな動きを実現
+    game.gamepadInterval = setInterval(handleMovementInput, MOVE_DELAY); 
+
+    // ゲームパッドの状態表示を更新するロジック
+    setInterval(() => {
+        const gamepad = navigator.getGamepads()[0];
+        const statusElement = document.getElementById('gamepad-status');
+        if (statusElement) {
+            if (gamepad) {
+                statusElement.textContent = `コントローラー: ${gamepad.id} 接続済み`;
+                statusElement.style.color = '#4CAF50';
+            } else {
+                statusElement.textContent = 'コントローラー: 未接続 (キーボード操作)';
+                statusElement.style.color = '#FF9800';
+            }
+        }
+    }, 500);
 }
 
 function updateGamepadStatus() {
+    // Gamepad接続/切断イベント発生時にコンソールに出力
     const gamepads = navigator.getGamepads();
-    let connectedCount = 0;
-    for (let i = 0; i < gamepads.length; i++) {
-        if (gamepads[i]) connectedCount++;
+    if (gamepads.length > 0 && gamepads[0]) {
+        console.log("Gamepad connected at index %d: %s. %d buttons, %d axes.",
+                    gamepads[0].index, gamepads[0].id,
+                    gamepads[0].buttons.length, gamepads[0].axes.length);
+    } else {
+        console.log("Gamepad disconnected.");
     }
-
-    let statusText = `${connectedCount}台のコントローラーが接続されています。`;
-    document.getElementById('gamepad-status').textContent = statusText;
-    document.getElementById('gamepad-status').style.color = connectedCount > 0 ? '#4CAF50' : '#F44336';
+    // startGamepadPollingが既に実行されているため、ここでは特別な処理は不要
 }
-
-function pollGamepads() {
-    const gamepads = navigator.getGamepads();
-    const now = Date.now();
-    const gamepad = gamepads[0];
-    if (!gamepad) return;
-
-    // ゲームパッドによるアクション
-    if (game.currentScreen === 'game' && gameState.gameRunning) {
-        const myPlayer = gameState.players[game.playerId];
-        if (!myPlayer || myPlayer.isDead) return;
-
-        // ボタン: X=0, A=1, B=2, Y=3, L1=4, R1=5, L2=6, R2=7
-        if (gamepad.buttons[4]?.pressed) sendAction('SKILL1');
-        if (gamepad.buttons[5]?.pressed) sendAction('SKILL2');
-        if (gamepad.buttons[7]?.pressed) sendAction('SUPER');
-    }
-    
-    // ゲームパッドによる移動
-    if (now - game.lastMoveTime < MOVE_DELAY) return;
-
-    let dx = 0, dy = 0;
-
-    // 十字キー
-    if (gamepad.buttons[12]?.pressed) dy = -1; // 上
-    else if (gamepad.buttons[13]?.pressed) dy = 1; // 下
-    else if (gamepad.buttons[14]?.pressed) dx = -1; // 左
-    else if (gamepad.buttons[15]?.pressed) dx = 1; // 右
-    
-    // 左スティック
-    const axisX = gamepad.axes[0] || 0;
-    const axisY = gamepad.axes[1] || 0;
-
-    if (dx === 0 && dy === 0) {
-        if (axisY < -MOVE_THRESHOLD) dy = -1; 
-        else if (axisY > MOVE_THRESHOLD) dy = 1; 
-        else if (axisX < -MOVE_THRESHOLD) dx = -1; 
-        else if (axisX > MOVE_THRESHOLD) dx = 1; 
-    }
-
-    if (dx !== 0 || dy !== 0) {
-        game.lastMoveTime = now;
-        
-        if (game.currentScreen === 'lobby') {
-            sendAction('MOVE_LOBBY', { dx: dx * 10, dy: dy * 10 });
-        } else if (game.currentScreen === 'game' && gameState.gameRunning) {
-            sendAction('MOVE', { dx: dx * 10, dy: dy * 10 });
-        }
-    }
-}
-
 
 // --- ゲーム画面の描画 ---
 function gameRenderLoop() {
-    if (game.currentScreen !== 'game' || !game.gameCtx) return;
+    // 描画がロビー/ゲームで異なるため、現在の状態に応じて処理を分ける
+    if (game.currentScreen === 'game') {
+        renderGame();
+    } else if (game.currentScreen === 'lobby') {
+        renderLobby();
+    }
+}
 
+function renderGame() {
     const ctx = game.gameCtx;
     const canvas = game.gameCanvas;
+    const myPlayer = gameState.players[game.playerId];
+    if (!ctx || !myPlayer) return;
 
-    // 1. 背景描画
-    ctx.fillStyle = '#111';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    if (!gameState.gameRunning) {
-        // カウントダウン表示
-        const elapsedTime = Date.now() - gameState.startTime;
-        const remainingSeconds = gameState.countdown - Math.floor(elapsedTime / 1000);
-        
-        ctx.fillStyle = 'white';
-        ctx.font = '80px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(remainingSeconds > 0 ? remainingSeconds : 'FIGHT!', canvas.width / 2, canvas.height / 2);
-        
-        if (remainingSeconds <= 0) {
-            // カウントダウン終了で強制的にゲームループを再開
-            // サーバー側で'GAME_START'が送られるので、ここは描画用
-        }
-    }
-    
-    // 2. ボス攻撃範囲描画 (ゲージ付き)
-    gameState.bossAttacks.forEach(attack => {
-        const { x, y, radius, type, damageTime, duration } = attack;
-        const gaugeRatio = Math.min(1, (Date.now() - damageTime) / duration);
-        const color = gaugeRatio < 1 ? 'rgba(255, 0, 0, 0.3)' : 'rgba(255, 0, 0, 0.8)';
-        
-        // 円形攻撃
-        if (type === 'CIRCLE') {
-            drawCircle(ctx, x, y, radius, color, color);
-            // ゲージ (円の中心から外へ)
-            ctx.beginPath();
-            ctx.arc(x, y, radius * gaugeRatio, 0, Math.PI * 2);
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 3;
-            ctx.stroke();
-        }
-        // 他の攻撃タイプ (帯、直線など) も追加可能
-    });
 
-    // 3. ボス描画
+    // 画面の中心をプレイヤーに合わせるためのオフセット計算
+    const offsetX = canvas.width / 2 - myPlayer.x;
+    const offsetY = canvas.height / 2 - myPlayer.y;
+
+    // Bossの描画
     if (gameState.boss) {
-        drawCircle(ctx, gameState.boss.x, gameState.boss.y, BOSS_RADIUS, 'darkred', 'red');
-        drawHealthBar(ctx, gameState.boss.x, gameState.boss.y - BOSS_RADIUS - 10, BOSS_RADIUS * 2, 10, gameState.boss.hp, gameState.boss.maxHp, 'red');
-        
-        // ボス名
-        ctx.fillStyle = 'white';
-        ctx.font = '20px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('THE ABYSSAL KNIGHT', gameState.boss.x, gameState.boss.y - BOSS_RADIUS - 30);
+        drawBoss(ctx, gameState.boss, offsetX, offsetY);
     }
-    
-    // 4. 弾丸描画 (プレイヤー/ボス)
+
+    // Projectileの描画
     gameState.projectiles.forEach(p => {
-        drawCircle(ctx, p.x, p.y, p.radius, p.color, p.color);
+        drawProjectile(ctx, p, offsetX, offsetY);
     });
 
-    // 5. プレイヤー描画
+    // Boss Attackの描画
+    gameState.bossAttacks.forEach(a => {
+        drawBossAttack(ctx, a, offsetX, offsetY);
+    });
+
+    // プレイヤーの描画
     Object.values(gameState.players).forEach(p => {
-        if (!p.isDead) {
-            const jobData = JOB_DATA[p.job] || {};
-            const playerColor = p.color;
-            
-            // プレイヤー
-            drawPlayer(ctx, p, playerColor);
+        drawPlayer(ctx, p, p.color, offsetX, offsetY);
 
-            // 自身を強調
-            if (p.id === game.playerId) {
-                drawCircle(ctx, p.x, p.y, PLAYER_RADIUS + 5, 'rgba(255, 255, 0, 0.3)', 'rgba(255, 255, 0, 0.0)');
-            }
-            
-            // オートアタック射程
-            drawAutoAttackRange(ctx, p, false);
-
-            // 体力バー
-            drawHealthBar(ctx, p.x, p.y - PLAYER_RADIUS - 10, 50, 8, p.hp, p.maxHp, 'lime');
-
-            // プレイヤーIDと職業
-            ctx.fillStyle = 'white';
-            ctx.font = '12px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText(`${p.id} [${jobData.name}]`, p.x, p.y + PLAYER_RADIUS + 15);
-
-            // スキルCT表示 (自機周り)
-            if (p.id === game.playerId) {
-                drawSkillCooldowns(ctx, p);
-            }
-        }
+        // HPバー
+        const hpY = p.y - PLAYER_RADIUS - 15 + offsetY;
+        const hpX = p.x + offsetX; // HPバーはプレイヤーの中心に合わせる
+        drawHealthBar(ctx, hpX, hpY, p.hp / p.maxHp, p.id === game.playerId);
     });
+
+    // 自身のプレイヤー情報UIの更新
+    updateGameUI(myPlayer);
 }
 
-function drawPlayer(ctx, p, color) {
-    drawCircle(ctx, p.x, p.y, PLAYER_RADIUS, color, color);
-    
-    // 自身を示すためのマーク
-    if (p.id === game.playerId) {
-        ctx.fillStyle = 'white';
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, PLAYER_RADIUS / 2, 0, Math.PI * 2);
-        ctx.fill();
+function updateGameUI(player) {
+    // プレイヤーのHPとCOOLDOWN表示など
+    const hpElement = document.getElementById('player-hp-display');
+    const cdElement = document.getElementById('player-cooldowns');
+
+    if (hpElement) {
+        hpElement.textContent = `HP: ${player.hp} / ${player.maxHp}`;
+        hpElement.style.color = player.hp < player.maxHp * 0.3 ? '#F44336' : '#4CAF50';
+    }
+
+    if (cdElement) {
+        const now = Date.now();
+        let html = '';
+        if (player.job) {
+            // スキル1
+            const skill1CD = player.skill1.nextCastTime - now;
+            const skill1Name = JOB_DATA[player.job].skill1.name;
+            const skill1CDTime = Math.max(0, Math.ceil(skill1CD / 1000));
+            html += `<p>Q: ${skill1Name} (${skill1CDTime}s)</p>`;
+
+            // スキル2
+            const skill2CD = player.skill2.nextCastTime - now;
+            const skill2Name = JOB_DATA[player.job].skill2.name;
+            const skill2CDTime = Math.max(0, Math.ceil(skill2CD / 1000));
+            html += `<p>R: ${skill2Name} (${skill2CDTime}s)</p>`;
+
+            // スーパー
+            const superCD = player.super.nextCastTime - now;
+            const superName = JOB_DATA[player.job].super.name;
+            const superCDTime = Math.max(0, Math.ceil(superCD / 1000));
+            html += `<p>F: ${superName} (${superCDTime}s)</p>`;
+        } else {
+            html += '<p>職業を選択してください</p>';
+        }
+        cdElement.innerHTML = html;
     }
 }
 
-function drawAutoAttackRange(ctx, p, isLobby) {
-    if (!p.job) return;
-    const range = JOB_DATA[p.job].range || AUTO_ATTACK_RANGE; // ロビーではJOB_DATAから、ゲームではサーバーから
-    
-    ctx.strokeStyle = p.color + '40';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]);
+// --- 描画ユーティリティ ---
 
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, range, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-}
-
-function drawSkillCooldowns(ctx, p) {
-    const skills = [p.skill1, p.skill2, p.super];
-    const jobData = JOB_DATA[p.job];
-    const centerX = p.x;
-    const centerY = p.y;
-    const radius = PLAYER_RADIUS + 30;
-    const now = Date.now();
-    
-    skills.forEach((skill, index) => {
-        const angle = Math.PI * 2 / 3 * index - Math.PI / 2;
-        const x = centerX + Math.cos(angle) * radius;
-        const y = centerY + Math.sin(angle) * radius;
-        
-        // CTサークル
-        const totalCD = jobData[`skill${index + 1}`]?.cd || jobData.super.cd;
-        const timeRemaining = Math.max(0, (skill.nextCastTime || 0) - now);
-        const percentCD = 1 - (timeRemaining / totalCD);
-        
-        drawCircle(ctx, x, y, 15, 'rgba(255, 255, 255, 0.8)', '#333');
-        
-        // CTゲージ (円弧)
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.arc(x, y, 15, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * percentCD);
-        ctx.closePath();
-        ctx.fill();
-
-        // スキル番号
-        ctx.fillStyle = 'white';
-        ctx.font = '14px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(index + 1, x, y + 5);
-    });
-}
-
-
-// --- 汎用描画関数 ---
-function drawCircle(ctx, x, y, r, fill, stroke) {
-    ctx.fillStyle = fill;
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = 2;
+function drawCircle(ctx, x, y, r, fillColor, strokeColor) {
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = fillColor;
     ctx.fill();
-    if (stroke) ctx.stroke();
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 3;
+    ctx.stroke();
 }
 
-function drawHealthBar(ctx, x, y, width, height, current, max, color) {
-    const percent = current / max;
-    ctx.fillStyle = 'black';
+function drawPlayer(ctx, p, color, offsetX = 0, offsetY = 0) {
+    const drawX = p.x + offsetX;
+    const drawY = p.y + offsetY;
+
+    // プレイヤー本体
+    drawCircle(ctx, drawX, drawY, PLAYER_RADIUS, color, 'white');
+
+    // 職業マーク (ロビーでは表示しない)
+    if (p.job && game.currentScreen === 'game') {
+        const job = JOB_DATA[p.job];
+        ctx.fillStyle = 'white';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(job.name.substring(0, 1), drawX, drawY + 4);
+    }
+}
+
+function drawBoss(ctx, boss, offsetX, offsetY) {
+    const drawX = boss.x + offsetX;
+    const drawY = boss.y + offsetY;
+
+    // ボス本体
+    drawCircle(ctx, drawX, drawY, BOSS_RADIUS, '#8B0000', '#F44336');
+
+    // HPバー
+    const hpY = drawY - BOSS_RADIUS - 10;
+    const hpX = drawX;
+    drawHealthBar(ctx, hpX, hpY, boss.hp / boss.maxHp, false, 150, 15);
+}
+
+function drawProjectile(ctx, p, offsetX, offsetY) {
+    const drawX = p.x + offsetX;
+    const drawY = p.y + offsetY;
+
+    drawCircle(ctx, drawX, drawY, p.radius, p.color, p.color);
+}
+
+function drawBossAttack(ctx, a, offsetX, offsetY) {
+    if (a.type === 'AOE') {
+        ctx.beginPath();
+        ctx.arc(a.x + offsetX, a.y + offsetY, a.radius, 0, Math.PI * 2);
+        ctx.fillStyle = a.warning ? 'rgba(255, 0, 0, 0.3)' : 'rgba(255, 0, 0, 0.8)';
+        ctx.fill();
+        ctx.strokeStyle = a.warning ? 'red' : 'white';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // 警告タイマー
+        if (a.warning && a.damageTime) {
+            const timeLeft = Math.ceil((a.damageTime - Date.now()) / 1000);
+            if (timeLeft > 0) {
+                ctx.fillStyle = 'white';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(timeLeft, a.x + offsetX, a.y + offsetY + 10);
+            }
+        }
+    }
+    // 他の攻撃タイプは省略
+}
+
+function drawAutoAttackRange(ctx, p, isLobby = false, offsetX = 0, offsetY = 0) {
+    const drawX = p.x + offsetX;
+    const drawY = p.y + offsetY;
+
+    ctx.beginPath();
+    ctx.arc(drawX, drawY, AUTO_ATTACK_RANGE, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    if (isLobby) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.fill();
+    }
+}
+
+function drawHealthBar(ctx, x, y, percent, isMe, width = 60, height = 8) {
+    const color = isMe ? '#4CAF50' : (percent < 0.3 ? '#F44336' : '#FFEB3B');
+
+    // 背景
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
     ctx.fillRect(x - width / 2, y, width, height);
-    
+
+    // HPゲージ本体
     ctx.fillStyle = color;
     ctx.fillRect(x - width / 2, y, width * percent, height);
-    
-    ctx.strokeStyle = 'white';
+
+    ctx.strokeStyle = '#111';
     ctx.lineWidth = 1;
     ctx.strokeRect(x - width / 2, y, width, height);
 }
@@ -848,7 +889,7 @@ function drawHealthBar(ctx, x, y, width, height, current, max, color) {
 // --- リザルト画面 ---
 function completeLevel(result, stats) {
     playSound(result === 'WIN' ? 'win' : 'lose');
-    
+
     const title = document.getElementById('result-title');
     const message = document.getElementById('result-message');
     const resultTableBody = document.querySelector('#result-table tbody');
@@ -868,15 +909,12 @@ function completeLevel(result, stats) {
     Object.values(stats).forEach(playerStat => {
         const row = resultTableBody.insertRow();
         const jobName = playerStat.job ? JOB_DATA[playerStat.job].name : '未選択';
-        
+
         row.insertCell().textContent = playerStat.id;
         row.insertCell().textContent = jobName;
         row.insertCell().textContent = playerStat.deaths;
         row.insertCell().textContent = playerStat.damageDealt.toLocaleString();
-        row.insertCell().textContent = playerStat.healingDone.toLocaleString();
-        
-        row.style.color = gameState.players[playerStat.id]?.color || '#333';
-        row.style.fontWeight = 'bold';
+        row.insertCell().textContent = playerStat.healDone.toLocaleString();
     });
 
     showScreen('result');
