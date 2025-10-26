@@ -1,0 +1,217 @@
+/* style.css */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Arial', sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #333;
+}
+
+.screen {
+    display: none;
+    width: 100%;
+    min-height: 100vh;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.screen.active {
+    display: flex;
+}
+
+/* タイトル/接続モーダル/リザルト (共通) */
+.title-container, .lobby-container, .clear-container {
+    text-align: center;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 30px 40px;
+    border-radius: 20px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    max-width: 900px;
+    width: 95%;
+}
+
+.title-container h1 {
+    font-size: 3rem;
+    color: #333;
+    margin-bottom: 40px;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.input-group {
+    margin: 10px 0;
+}
+
+.input-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.input-group input[type="text"] {
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 1rem;
+    width: 100%;
+    max-width: 300px;
+}
+.input-group input[type="range"] {
+    width: 100%;
+    max-width: 300px;
+}
+
+
+/* ロビー画面 */
+.lobby-container h2 {
+    margin-bottom: 20px;
+}
+
+#lobby-main-area {
+    display: flex;
+    justify-content: space-around;
+    gap: 20px;
+}
+
+.lobby-panel {
+    flex: 1;
+    min-width: 150px;
+    text-align: left;
+    padding: 15px;
+    border: 1px solid #ccc;
+    border-radius: 10px;
+}
+
+.arena-preview {
+    flex-shrink: 0;
+}
+
+#lobby-canvas {
+    border: 2px solid #333;
+    background-color: #000;
+    border-radius: 5px;
+}
+
+#lobby-player-list p {
+    font-size: 1.1rem;
+    margin-top: 5px;
+}
+
+.lobby-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
+
+
+/* ゲーム画面 */
+.game-container {
+    background: rgba(255, 255, 255, 0.95);
+    padding: 20px;
+    border-radius: 20px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+    max-width: 840px;
+    width: 100%;
+}
+
+.game-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.game-header span {
+    font-size: 1.2rem;
+    font-weight: bold;
+}
+
+.game-main-view {
+    display: flex;
+    justify-content: center;
+}
+
+#game-canvas {
+    border: 5px solid #333;
+    background-color: #000;
+    border-radius: 10px;
+}
+
+/* リザルト画面 */
+.clear-container h2 {
+    font-size: 2.5rem;
+    margin-bottom: 15px;
+}
+
+.clear-container p {
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin-bottom: 30px;
+}
+
+#result-table {
+    width: 100%;
+    margin: 20px auto;
+    border-collapse: collapse;
+}
+
+#result-table th, #result-table td {
+    border: 1px solid #ccc;
+    padding: 8px;
+    text-align: center;
+}
+
+#result-table th {
+    background-color: #eee;
+}
+
+
+/* メニューボタン共通 */
+.menu-button {
+    padding: 15px 30px;
+    font-size: 1.2rem;
+    font-weight: bold;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin: 5px;
+}
+
+.menu-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+}
+
+.menu-button.small {
+    padding: 10px 20px;
+    font-size: 1rem;
+}
+
+/* レスポンシブデザイン */
+@media (max-width: 800px) {
+    #lobby-main-area {
+        flex-direction: column;
+        align-items: center;
+    }
+    .lobby-panel, #lobby-canvas {
+        max-width: 100%;
+        width: 100%;
+    }
+    #lobby-canvas, #game-canvas {
+        width: 100%;
+        height: auto;
+    }
+}

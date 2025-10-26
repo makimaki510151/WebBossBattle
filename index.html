@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>マルチプレイヤー ボス戦 アリーナ</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    
+    <div id="connection-modal" class="screen">
+        <div class="title-container">
+            <h2 id="connection-title">部屋に参加</h2>
+            <p style="margin-bottom: 10px;"> 
+                **ngrokを使用する場合**: 「ホスト名」（例: `random-id.ngrok-free.app`）を、ローカル接続の場合は「ホスト名:ポート番号」を入力してください。
+            </p>
+            <div class="input-group" style="margin-bottom: 25px;">
+                <label for="server-address">接続アドレス:</label>
+                <input type="text" id="server-address" placeholder="例: massive-yak-4422.ngrok-free.app または localhost:8080">
+            </div>
+            <button id="connect-submit" class="menu-button">接続して参加</button>
+            <button id="connection-cancel" class="menu-button small" style="background: gray; margin-top: 10px;">キャンセル</button>
+        </div>
+    </div>
+    
+    <div id="title-screen" class="screen active">
+        <div class="title-container">
+            <h1>🛡️ マルチプレイヤー ボス戦</h1>
+            <div style="margin-top: 40px; display: flex; flex-direction: column; gap: 15px;">
+                <button id="create-room-button" class="menu-button">部屋を作成 (ホスト)</button>
+                <button id="join-room-button" class="menu-button">部屋に参加 (ゲスト)</button>
+            </div>
+            <div id="connection-status" style="margin-top: 20px; font-weight: bold; color: #764ba2;">未接続</div>
+        </div>
+    </div>
+
+    <div id="lobby-screen" class="screen">
+        <div class="lobby-container">
+            <h2>準備部屋 (Lobby)</h2>
+            <div id="lobby-main-area">
+                
+                <div id="lobby-player-list" class="lobby-panel">
+                    <h4>参加プレイヤー (0人):</h4>
+                </div>
+
+                <div class="arena-preview">
+                    <canvas id="lobby-canvas" width="600" height="600"></canvas>
+                </div>
+                
+                <div id="host-settings-panel" class="lobby-panel" style="display: none;">
+                    <h4>ボス設定</h4>
+                    <div class="input-group">
+                        <label for="boss-hp">ボス最大HP (x1000):</label>
+                        <input type="range" id="boss-hp" min="5" max="50" value="10">
+                        <span id="boss-hp-value">10,000</span>
+                    </div>
+                    <div class="input-group">
+                        <label for="boss-damage">ボス攻撃倍率:</label>
+                        <input type="range" id="boss-damage" min="1" max="3" step="0.5" value="1.0">
+                        <span id="boss-damage-value">1.0倍</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="lobby-status-area">
+                <p id="lobby-message" style="font-weight: bold; color: #F44336; margin: 20px 0;">ホストの操作を待っています...</p>
+                <div class="lobby-buttons">
+                    <button id="start-game-button" class="menu-button" style="display: none;">ゲーム開始</button>
+                    <button id="lobby-disconnect-button" class="menu-button small" style="background: gray;">切断してタイトルに戻る</button>
+                </div>
+            </div>
+            <div id="gamepad-status" style="margin-top: 10px; font-size: 0.9rem; color: #764ba2;">コントローラー接続を確認中...</div>
+        </div>
+    </div>
+
+    <div id="game-screen" class="screen">
+        <div class="game-container">
+            <div class="game-header">
+                <button id="back-to-title" class="menu-button small">タイトルに戻る</button>
+                <span id="game-info">BOSS HP: <span id="boss-hp-display" style="color: red;">?</span></span>
+            </div>
+            
+            <div class="game-main-view">
+                <canvas id="game-canvas" width="800" height="800"></canvas>
+            </div>
+
+        </div>
+    </div>
+
+    <div id="result-screen" class="screen">
+        <div class="clear-container">
+            <h2 id="result-title">戦闘終了！</h2>
+            <p id="result-message">YOU WIN!</p>
+            <table id="result-table">
+                <thead>
+                    <tr><th>プレイヤー</th><th>職業</th><th>死亡回数</th><th>与ダメージ</th><th>回復量</th></tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+            <button id="back-to-select-clear" class="menu-button">タイトルに戻る</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
